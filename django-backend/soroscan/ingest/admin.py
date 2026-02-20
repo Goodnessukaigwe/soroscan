@@ -38,6 +38,7 @@ class ContractEventAdmin(admin.ModelAdmin):
     readonly_fields = ["payload_hash", "timestamp"]
     ordering = ["-timestamp"]
     date_hierarchy = "timestamp"
+    list_select_related = ["contract"]
 
     @admin.display(description="Contract")
     def contract_name(self, obj):
@@ -55,6 +56,7 @@ class WebhookSubscriptionAdmin(admin.ModelAdmin):
     search_fields = ["target_url", "contract__name"]
     readonly_fields = ["secret", "created_at", "last_triggered", "failure_count"]
     ordering = ["-created_at"]
+    list_select_related = ["contract"]
 
 
 @admin.register(IndexerState)

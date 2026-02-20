@@ -57,7 +57,7 @@ class TrackedContractViewSet(viewsets.ModelViewSet):
     def events(self, request, pk=None):
         """Get all events for a specific contract."""
         contract = self.get_object()
-        events = contract.events.all()[:100]
+        events = contract.events.select_related("contract").all()[:100]
         serializer = ContractEventSerializer(events, many=True)
         return Response(serializer.data)
 
@@ -94,7 +94,9 @@ class ContractEventViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ["-timestamp"]
 
     def get_queryset(self):
-        return ContractEvent.objects.filter(contract__owner=self.request.user)
+        return ContractEvent.objects.select_related("contract").filter(
+            contract__owner=self.request.user
+        )
 
 
 class WebhookSubscriptionViewSet(viewsets.ModelViewSet):

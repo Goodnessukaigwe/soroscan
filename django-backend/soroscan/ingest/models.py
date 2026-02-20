@@ -130,6 +130,10 @@ class ContractEvent(models.Model):
             models.Index(fields=["contract", "event_type", "timestamp"]),
             models.Index(fields=["ledger"]),
             models.Index(fields=["tx_hash"]),
+            models.Index(fields=["contract", "-timestamp"]),
+            models.Index(fields=["contract", "event_type"]),
+            models.Index(fields=["ledger"]),
+            models.Index(fields=["-timestamp"]),
         ]
 
     def __str__(self):
