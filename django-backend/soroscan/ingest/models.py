@@ -34,6 +34,12 @@ class TrackedContract(models.Model):
         blank=True,
         help_text="Optional ABI/schema for decoding events",
     )
+    last_indexed_ledger = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Last ledger sequence that was indexed for this contract",
+    )
     is_active = models.BooleanField(default=True, help_text="Whether indexing is active")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -120,6 +126,10 @@ class ContractEvent(models.Model):
         db_index=True,
         help_text="Ledger sequence number",
     )
+    event_index = models.PositiveIntegerField(
+        default=0,
+        help_text="0-based event index within the ledger",
+    )
     timestamp = models.DateTimeField(db_index=True, help_text="Event timestamp")
     tx_hash = models.CharField(max_length=64, help_text="Transaction hash")
     raw_xdr = models.TextField(blank=True, help_text="Raw XDR for debugging")
@@ -130,10 +140,13 @@ class ContractEvent(models.Model):
             models.Index(fields=["contract", "event_type", "timestamp"]),
             models.Index(fields=["ledger"]),
             models.Index(fields=["tx_hash"]),
-            models.Index(fields=["contract", "-timestamp"]),
-            models.Index(fields=["contract", "event_type"]),
-            models.Index(fields=["ledger"]),
-            models.Index(fields=["-timestamp"]),
+            models.Index(fields=["contract", "ledger", "event_index"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["contract", "ledger", "event_index"],
+                name="unique_contract_ledger_event_index",
+            ),
         ]
 
     def __str__(self):
