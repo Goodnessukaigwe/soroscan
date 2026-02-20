@@ -3,7 +3,7 @@ Stellar/Soroban client for interacting with the SoroScan contract.
 """
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from django.conf import settings
 from stellar_sdk import Keypair, Network, TransactionBuilder
@@ -222,3 +222,48 @@ class SorobanClient:
         except Exception as e:
             logger.exception("Failed to get total events")
             return None
+
+    def get_events_range(
+        self,
+        contract_id: str,
+        start_ledger: int,
+        end_ledger: int,
+    ) -> list[Any]:
+        """
+        Fetch contract events in an inclusive ledger range.
+
+        The caller is responsible for pagination strategy; this method fetches the
+        requested range and returns raw SDK event objects.
+        """
+        if start_ledger > end_ledger:
+            return []
+
+        filters = [
+            {
+                "type": "contract",
+                "contractIds": [contract_id],
+            }
+        ]
+        pagination = {"limit": 200}
+
+        try:
+            response = self.server.get_events(
+                start_ledger=start_ledger,
+                end_ledger=end_ledger,
+                filters=filters,
+                pagination=pagination,
+            )
+        except TypeError:
+            # Some SDK variants do not support end_ledger.
+            response = self.server.get_events(
+                start_ledger=start_ledger,
+                filters=filters,
+                pagination=pagination,
+            )
+
+        events = list(getattr(response, "events", []) or [])
+        return [
+            event
+            for event in events
+            if start_ledger <= int(getattr(event, "ledger", start_ledger)) <= end_ledger
+        ]

@@ -20,11 +20,12 @@ class TrackedContractSerializer(serializers.ModelSerializer):
             "description",
             "abi_schema",
             "is_active",
+            "last_indexed_ledger",
             "event_count",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "event_count", "created_at", "updated_at"]
+        read_only_fields = ["id", "last_indexed_ledger", "event_count", "created_at", "updated_at"]
 
     def get_event_count(self, obj) -> int:
         return obj.events.count()
@@ -46,6 +47,7 @@ class ContractEventSerializer(serializers.ModelSerializer):
             "payload",
             "payload_hash",
             "ledger",
+            "event_index",
             "timestamp",
             "tx_hash",
             "schema_version",
