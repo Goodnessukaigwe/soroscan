@@ -19,7 +19,22 @@ python manage.py migrate
 python manage.py createsuperuser
 
 # Start development server
+daphne -b 0.0.0.0 -p 8000 soroscan.asgi:application
+
+# For development with auto-reload
 python manage.py runserver
+```
+
+## Running with ASGI (Production)
+
+For WebSocket support in production, use an ASGI server:
+
+```bash
+# Using Daphne
+daphne -b 0.0.0.0 -p 8000 soroscan.asgi:application
+
+# Using Uvicorn
+uvicorn soroscan.asgi:application --host 0.0.0.0 --port 8000
 ```
 
 ## Environment Variables
@@ -58,7 +73,64 @@ celery -A soroscan beat -l info
 
 ## API Endpoints
 
+### REST API
+
 - `POST /api/ingest/record/` - Record a new event
 - `GET /api/events/` - List events
 - `GET /api/contracts/` - List tracked contracts
+
+### GraphQL
+
 - `POST /graphql/` - GraphQL endpoint
+
+### WebSocket
+
+- `ws://host/ws/events/<contract_id>/` - Real-time event streaming
+
+## WebSocket Usage
+
+Connect to a contract's event stream:
+
+```javascript
+// JavaScript example
+const ws = new WebSocket("ws://localhost:8000/ws/events/CABC123.../");
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log("New event:", data);
+};
+
+ws.onerror = (error) => {
+  console.error("WebSocket error:", error);
+};
+
+ws.onclose = (event) => {
+  console.log("WebSocket closed:", event.code);
+};
+```
+
+Filter by event type using query parameters:
+
+```javascript
+const ws = new WebSocket(
+  "ws://localhost:8000/ws/events/CABC123.../?event_type=swap",
+);
+```
+
+Python client example:
+
+```python
+import asyncio
+import websockets
+import json
+
+async def listen_to_events():
+    uri = "ws://localhost:8000/ws/events/CABC123.../"
+    async with websockets.connect(uri) as websocket:
+        while True:
+            message = await websocket.recv()
+            event = json.loads(message)
+            print(f"Received event: {event}")
+
+asyncio.run(listen_to_events())
+```

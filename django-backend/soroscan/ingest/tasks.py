@@ -153,12 +153,33 @@ def process_new_event(event_data: dict[str, Any]) -> None:
     Args:
         event_data: Decoded event data from the ledger
     """
+    from asgiref.sync import async_to_sync
+    from channels.layers import get_channel_layer
+
     contract_id = event_data.get("contract_id")
     event_type = event_data.get("event_type")
 
     if not contract_id:
         logger.warning("Event missing contract_id", extra={})
         return
+
+    # Publish to WebSocket channel layer
+    channel_layer = get_channel_layer()
+    if channel_layer:
+        try:
+            async_to_sync(channel_layer.group_send)(
+                f"events_{contract_id}",
+                {
+                    "type": "contract_event",
+                    "data": event_data,
+                },
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to publish event to channel layer: %s",
+                e,
+                extra={"contract_id": contract_id},
+            )
 
     # Find matching webhooks
     webhooks = WebhookSubscription.objects.filter(
