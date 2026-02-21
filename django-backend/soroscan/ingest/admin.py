@@ -5,7 +5,7 @@ from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin.helpers import ActionForm
 
-from .models import ContractEvent, IndexerState, TrackedContract, WebhookSubscription
+from .models import ContractEvent, IndexerState, TrackedContract, WebhookSubscription, EventSchema
 from .tasks import backfill_contract_events
 
 

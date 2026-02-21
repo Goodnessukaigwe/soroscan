@@ -12,7 +12,7 @@ import requests
 from celery import shared_task
 from django.utils import timezone
 
-from .models import ContractEvent, TrackedContract, WebhookSubscription, IndexerState
+from .models import ContractEvent, TrackedContract, WebhookSubscription, IndexerState, EventSchema
 from .stellar_client import SorobanClient
 
 logger = logging.getLogger(__name__)

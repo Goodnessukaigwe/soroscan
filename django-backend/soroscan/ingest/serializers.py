@@ -3,7 +3,7 @@ DRF Serializers for SoroScan API.
 """
 from rest_framework import serializers
 
-from .models import ContractEvent, TrackedContract, WebhookSubscription
+from .models import ContractEvent, TrackedContract, WebhookSubscription, EventSchema
 
 
 class TrackedContractSerializer(serializers.ModelSerializer):
