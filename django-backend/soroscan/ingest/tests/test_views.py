@@ -52,7 +52,7 @@ class TestTrackedContractViewSet:
         url = reverse("contract-list")
         response = api_client.get(url)
 
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_create_contract(self, authenticated_client):
         url = reverse("contract-list")
@@ -126,7 +126,7 @@ class TestContractEventViewSet:
         url = reverse("event-list")
         response = api_client.get(url)
 
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_filter_events_by_contract(self, authenticated_client, contract):
         other_contract = TrackedContractFactory(owner=authenticated_client.handler._force_user)
