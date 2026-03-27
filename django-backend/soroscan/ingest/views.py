@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+from datetime import timedelta
 
 from django.conf import settings
 from django.db.models import Count, Max, Q
@@ -24,7 +25,7 @@ import requests as http_requests
 
 from soroscan.throttles import IngestRateThrottle
 
-from .cache_utils import get_or_set_json, query_cache_ttl, stable_cache_key
+from .cache_utils import cache_result, get_or_set_json, query_cache_ttl, stable_cache_key
 from .models import (
     APIKey,
     AdminAction,
@@ -94,6 +95,27 @@ class TrackedContractViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "contract_id"]
     ordering_fields = ["created_at", "name"]
     ordering = ["-created_at"]
+
+    @staticmethod
+    def _collect_warnings(items: list[dict]) -> list[dict[str, str]]:
+        warnings: list[dict[str, str]] = []
+        for item in items:
+            for warning in item.get("warnings", []):
+                if warning not in warnings:
+                    warnings.append(warning)
+        return warnings
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        if isinstance(response.data, dict) and "results" in response.data:
+            response.data["warnings"] = self._collect_warnings(response.data["results"])
+        return response
+
+    def retrieve(self, request, *args, **kwargs):
+        response = super().retrieve(request, *args, **kwargs)
+        if isinstance(response.data, dict):
+            response.data.setdefault("warnings", [])
+        return response
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
@@ -661,6 +683,48 @@ def record_event_view(request):
 def health_check(request):
     """Health check endpoint."""
     return Response({"status": "healthy", "service": "soroscan"})
+
+
+@extend_schema(
+    responses=inline_serializer(
+        name="ContractStatusResponse",
+        fields={
+            "total_contracts": serializers.IntegerField(),
+            "active_contracts": serializers.IntegerField(),
+            "paused_contracts": serializers.IntegerField(),
+            "total_events_indexed": serializers.IntegerField(),
+            "last_event_timestamp": serializers.DateTimeField(allow_null=True),
+            "events_per_minute": serializers.IntegerField(),
+        },
+    )
+)
+@api_view(["GET"])
+@cache_result(ttl=60)
+def contract_status(request):
+    """Return aggregate contract and event indexing snapshot statistics."""
+    contract_agg = TrackedContract.objects.aggregate(
+        total_contracts=Count("id"),
+        active_contracts=Count("id", filter=Q(is_active=True)),
+        paused_contracts=Count("id", filter=Q(is_active=False)),
+    )
+
+    one_minute_ago = timezone.now() - timedelta(seconds=60)
+    event_agg = ContractEvent.objects.aggregate(
+        total_events_indexed=Count("id"),
+        last_event_timestamp=Max("timestamp"),
+        events_per_minute=Count("id", filter=Q(timestamp__gte=one_minute_ago)),
+    )
+
+    return Response(
+        {
+            "total_contracts": contract_agg["total_contracts"] or 0,
+            "active_contracts": contract_agg["active_contracts"] or 0,
+            "paused_contracts": contract_agg["paused_contracts"] or 0,
+            "total_events_indexed": event_agg["total_events_indexed"] or 0,
+            "last_event_timestamp": event_agg["last_event_timestamp"],
+            "events_per_minute": event_agg["events_per_minute"] or 0,
+        }
+    )
 
 
 def contract_timeline_view(request, contract_id: str):

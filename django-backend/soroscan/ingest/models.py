@@ -83,6 +83,11 @@ class TrackedContract(models.Model):
     Contracts registered for event indexing.
     """
 
+    class DeprecationStatus(models.TextChoices):
+        ACTIVE = "active", "Active"
+        DEPRECATED = "deprecated", "Deprecated"
+        SUSPENDED = "suspended", "Suspended"
+
     contract_id = models.CharField(
         max_length=56,
         unique=True,
@@ -117,6 +122,17 @@ class TrackedContract(models.Model):
         help_text="Last ledger sequence that was indexed for this contract",
     )
     is_active = models.BooleanField(default=True, help_text="Whether indexing is active")
+    deprecation_status = models.CharField(
+        max_length=16,
+        choices=DeprecationStatus.choices,
+        default=DeprecationStatus.ACTIVE,
+        db_index=True,
+        help_text="Manual lifecycle/deprecation state for warning users",
+    )
+    deprecation_reason = models.TextField(
+        blank=True,
+        help_text="Optional reason shown to users when contract is deprecated/suspended",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -128,6 +144,16 @@ class TrackedContract(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.contract_id[:8]}...)"
+
+    def deprecation_warning(self) -> dict[str, str] | None:
+        if self.deprecation_status == self.DeprecationStatus.ACTIVE:
+            return None
+        status_label = self.get_deprecation_status_display().lower()
+        if self.deprecation_reason:
+            message = self.deprecation_reason
+        else:
+            message = f"This contract is {status_label}."
+        return {"type": "deprecation", "message": message}
 
 
 class ContractInvocation(models.Model):
@@ -506,6 +532,62 @@ class WebhookDeliveryLog(models.Model):
     def __str__(self):
         status_label = "OK" if self.success else f"FAIL({self.status_code})"
         return f"Delivery #{self.attempt_number} [{status_label}] sub={self.subscription_id}"
+
+
+class EventDeduplicationLog(models.Model):
+    """
+    Audit log for event deduplication attempts.
+
+    Records are subject to a 90-day TTL: the ``cleanup_old_dedup_logs``
+    Celery task (scheduled via Celery Beat) prunes entries older than 90 days.
+    """
+
+    contract = models.ForeignKey(
+        TrackedContract,
+        on_delete=models.CASCADE,
+        related_name="dedup_logs",
+        help_text="Contract the event belongs to",
+    )
+    ledger = models.PositiveBigIntegerField(
+        db_index=True,
+        help_text="Ledger sequence number",
+    )
+    event_index = models.PositiveIntegerField(
+        help_text="0-based event index within the ledger",
+    )
+    tx_hash = models.CharField(
+        max_length=64,
+        help_text="Transaction hash",
+    )
+    event_type = models.CharField(
+        max_length=100,
+        help_text="Event type that was checked",
+    )
+    duplicate_detected = models.BooleanField(
+        default=False,
+        help_text="True if a duplicate was detected",
+    )
+    reason = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Reason for the deduplication decision",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text="UTC timestamp of this deduplication check",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["contract", "created_at"]),
+            models.Index(fields=["contract", "ledger", "event_index"]),
+        ]
+
+    def __str__(self):
+        status = "DUP" if self.duplicate_detected else "NEW"
+        return f"[{status}] {self.event_type}@{self.ledger} ({self.contract.name})"
 
 
 class IndexerState(models.Model):

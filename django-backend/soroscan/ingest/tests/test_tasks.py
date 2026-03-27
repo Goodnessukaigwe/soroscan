@@ -12,8 +12,9 @@ import responses
 from celery.exceptions import Retry
 from django.utils import timezone
 
-from soroscan.ingest.models import AdminAction, RemediationIncident, RemediationRule, WebhookDeliveryLog, WebhookSubscription
+from soroscan.ingest.models import AdminAction, EventDeduplicationLog, RemediationIncident, RemediationRule, WebhookDeliveryLog, WebhookSubscription
 from soroscan.ingest.tasks import (
+    cleanup_old_dedup_logs,
     cleanup_webhook_delivery_logs,
     dispatch_webhook,
     evaluate_remediation_rules,
@@ -502,6 +503,120 @@ class TestCleanupWebhookDeliveryLogs:
     def test_returns_zero_when_nothing_to_prune(self):
         deleted_count = cleanup_webhook_delivery_logs.apply().result
         assert deleted_count == 0
+
+
+# ---------------------------------------------------------------------------
+# cleanup_old_dedup_logs
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestCleanupOldDedupLogs:
+    def test_prunes_old_entries(self, contract):
+        """Verify that logs older than retention period are deleted."""
+        old_log = EventDeduplicationLog.objects.create(
+            contract=contract,
+            ledger=100,
+            event_index=0,
+            tx_hash="abc123",
+            event_type="transfer",
+            duplicate_detected=True,
+            reason="Already exists",
+        )
+        # Manually backdate the created_at via queryset update
+        EventDeduplicationLog.objects.filter(pk=old_log.pk).update(
+            created_at=timezone.now() - timedelta(days=91)
+        )
+        
+        recent_log = EventDeduplicationLog.objects.create(
+            contract=contract,
+            ledger=101,
+            event_index=0,
+            tx_hash="def456",
+            event_type="swap",
+            duplicate_detected=False,
+            reason="New event",
+        )
+
+        deleted_count = cleanup_old_dedup_logs.apply().result
+
+        assert deleted_count == 1
+        assert EventDeduplicationLog.objects.filter(pk=recent_log.pk).exists()
+        assert not EventDeduplicationLog.objects.filter(pk=old_log.pk).exists()
+
+    def test_preserves_recent_entries(self, contract):
+        """Verify that logs within retention period are preserved."""
+        recent_log = EventDeduplicationLog.objects.create(
+            contract=contract,
+            ledger=100,
+            event_index=0,
+            tx_hash="abc123",
+            event_type="transfer",
+            duplicate_detected=True,
+            reason="Already exists",
+        )
+        # Ensure the log is recent (created_at is auto_now_add, so it's already recent)
+        
+        deleted_count = cleanup_old_dedup_logs.apply().result
+
+        assert deleted_count == 0
+        assert EventDeduplicationLog.objects.filter(pk=recent_log.pk).exists()
+
+    def test_dry_run_mode_does_not_delete(self, contract):
+        """Verify that dry_run=True doesn't delete records."""
+        log = EventDeduplicationLog.objects.create(
+            contract=contract,
+            ledger=100,
+            event_index=0,
+            tx_hash="abc123",
+            event_type="transfer",
+            duplicate_detected=True,
+            reason="Already exists",
+        )
+        # Manually backdate the created_at
+        EventDeduplicationLog.objects.filter(pk=log.pk).update(
+            created_at=timezone.now() - timedelta(days=91)
+        )
+        
+        deleted_count = cleanup_old_dedup_logs.apply(kwargs={"dry_run": True}).result
+
+        # Count should be reported
+        assert deleted_count == 1
+        # But record should still exist
+        assert EventDeduplicationLog.objects.filter(pk=log.pk).exists()
+
+    def test_returns_zero_when_nothing_to_prune(self):
+        """Verify task returns 0 when no records match deletion criteria."""
+        deleted_count = cleanup_old_dedup_logs.apply().result
+        assert deleted_count == 0
+
+    def test_respects_retention_days_setting(self, contract):
+        """Verify that the retention_days setting is respected."""
+        from django.test import override_settings
+        
+        # Create a very old log
+        old_log = EventDeduplicationLog.objects.create(
+            contract=contract,
+            ledger=100,
+            event_index=0,
+            tx_hash="abc123",
+            event_type="transfer",
+            duplicate_detected=True,
+            reason="Old",
+        )
+        EventDeduplicationLog.objects.filter(pk=old_log.pk).update(
+            created_at=timezone.now() - timedelta(days=60)
+        )
+        
+        # With default 90 days, this should not be deleted
+        deleted_count = cleanup_old_dedup_logs.apply().result
+        assert deleted_count == 0
+        assert EventDeduplicationLog.objects.filter(pk=old_log.pk).exists()
+        
+        # With 30-day retention, it should be deleted
+        with override_settings(DEDUP_LOG_RETENTION_DAYS=30):
+            deleted_count = cleanup_old_dedup_logs.apply().result
+            assert deleted_count == 1
+            assert not EventDeduplicationLog.objects.filter(pk=old_log.pk).exists()
 
 
 # ---------------------------------------------------------------------------

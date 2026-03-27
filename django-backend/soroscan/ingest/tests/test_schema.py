@@ -96,6 +96,49 @@ class TestGraphQLQueries:
         assert result.errors is None
         assert result.data["contract"]["contractId"] == contract.contract_id
 
+    def test_contract_query_returns_warning_for_deprecated_contract(self, contract):
+        contract.deprecation_status = "deprecated"
+        contract.deprecation_reason = "This contract is deprecated."
+        contract.save(update_fields=["deprecation_status", "deprecation_reason"])
+
+        query = f"""
+            query {{
+                contract(contractId: "{contract.contract_id}") {{
+                    contractId
+                    warnings {{
+                        type
+                        message
+                    }}
+                }}
+            }}
+        """
+        result = schema.execute_sync(query)
+
+        assert result.errors is None
+        assert result.data["contract"]["warnings"] == [
+            {
+                "type": "deprecation",
+                "message": "This contract is deprecated.",
+            }
+        ]
+
+    def test_contract_query_returns_empty_warnings_for_active_contract(self, contract):
+        query = f"""
+            query {{
+                contract(contractId: "{contract.contract_id}") {{
+                    contractId
+                    warnings {{
+                        type
+                        message
+                    }}
+                }}
+            }}
+        """
+        result = schema.execute_sync(query)
+
+        assert result.errors is None
+        assert result.data["contract"]["warnings"] == []
+
     def test_query_contract_not_found(self):
         query = """
             query {

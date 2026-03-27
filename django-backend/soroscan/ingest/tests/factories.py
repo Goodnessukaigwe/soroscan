@@ -33,6 +33,8 @@ class TrackedContractFactory(DjangoModelFactory):
     description = "Test contract"
     owner = factory.SubFactory(UserFactory)
     is_active = True
+    deprecation_status = TrackedContract.DeprecationStatus.ACTIVE
+    deprecation_reason = ""
 
 
 class EventSchemaFactory(DjangoModelFactory):

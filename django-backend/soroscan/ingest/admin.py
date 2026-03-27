@@ -117,11 +117,12 @@ class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
         "owner",
         "team",
         "is_active",
+        "deprecation_status",
         "last_indexed_ledger",
         "event_count",
         "created_at",
     ]
-    list_filter = ["is_active", "created_at"]
+    list_filter = ["is_active", "deprecation_status", "created_at"]
     search_fields = ["name", "contract_id"]
     readonly_fields = ["created_at", "updated_at"]
     ordering = ["-created_at"]

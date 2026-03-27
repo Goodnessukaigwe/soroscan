@@ -1,7 +1,9 @@
 import pytest
 import responses
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -110,6 +112,38 @@ class TestTrackedContractViewSet:
 
         assert response.status_code == status.HTTP_204_NO_CONTENT
         assert not TrackedContract.objects.filter(id=contract.id).exists()
+
+    def test_list_contracts_includes_warnings_wrapper(self, authenticated_client, user):
+        TrackedContractFactory(
+            owner=user,
+            deprecation_status=TrackedContract.DeprecationStatus.DEPRECATED,
+            deprecation_reason="Contract is end-of-life.",
+        )
+
+        url = reverse("contract-list")
+        response = authenticated_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert "warnings" in response.data
+        assert response.data["warnings"] == [
+            {"type": "deprecation", "message": "Contract is end-of-life."}
+        ]
+
+    def test_contract_detail_includes_deprecation_warning(self, authenticated_client, contract):
+        contract.deprecation_status = TrackedContract.DeprecationStatus.SUSPENDED
+        contract.deprecation_reason = "Contract has been suspended by admin."
+        contract.save(update_fields=["deprecation_status", "deprecation_reason"])
+
+        url = reverse("contract-detail", args=[contract.id])
+        response = authenticated_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["warnings"] == [
+            {
+                "type": "deprecation",
+                "message": "Contract has been suspended by admin.",
+            }
+        ]
 
 
 @pytest.mark.django_db
@@ -308,6 +342,54 @@ class TestHealthCheck:
         assert response.status_code == status.HTTP_200_OK
         assert response.data["status"] == "healthy"
         assert response.data["service"] == "soroscan"
+
+
+@pytest.mark.django_db
+class TestContractStatusView:
+    @pytest.fixture(autouse=True)
+    def clear_cache(self):
+        cache.clear()
+
+    def test_contract_status_returns_all_required_fields(self, authenticated_client, user):
+        active_contract = TrackedContractFactory(owner=user, is_active=True)
+        paused_contract = TrackedContractFactory(owner=user, is_active=False)
+
+        ContractEventFactory(contract=active_contract, timestamp=timezone.now())
+        ContractEventFactory(contract=paused_contract, timestamp=timezone.now() - timezone.timedelta(seconds=30))
+        ContractEventFactory(contract=active_contract, timestamp=timezone.now() - timezone.timedelta(minutes=5))
+
+        url = reverse("contract-status")
+        response = authenticated_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert set(response.data.keys()) == {
+            "total_contracts",
+            "active_contracts",
+            "paused_contracts",
+            "total_events_indexed",
+            "last_event_timestamp",
+            "events_per_minute",
+        }
+        assert response.data["total_contracts"] == 2
+        assert response.data["active_contracts"] == 1
+        assert response.data["paused_contracts"] == 1
+        assert response.data["total_events_indexed"] == 3
+        assert response.data["events_per_minute"] == 2
+        assert response.data["last_event_timestamp"] is not None
+
+    def test_contract_status_response_is_cached_for_60s(self, authenticated_client, user):
+        contract = TrackedContractFactory(owner=user, is_active=True)
+        url = reverse("contract-status")
+
+        ContractEventFactory(contract=contract, timestamp=timezone.now())
+        first = authenticated_client.get(url)
+        assert first.status_code == status.HTTP_200_OK
+        assert first.data["total_events_indexed"] == 1
+
+        ContractEventFactory(contract=contract, timestamp=timezone.now())
+        second = authenticated_client.get(url)
+        assert second.status_code == status.HTTP_200_OK
+        assert second.data["total_events_indexed"] == 1
 
 
 @pytest.mark.django_db
