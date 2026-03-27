@@ -111,6 +111,38 @@ class TestTrackedContractViewSet:
         assert response.status_code == status.HTTP_204_NO_CONTENT
         assert not TrackedContract.objects.filter(id=contract.id).exists()
 
+    def test_list_contracts_includes_warnings_wrapper(self, authenticated_client, user):
+        TrackedContractFactory(
+            owner=user,
+            deprecation_status=TrackedContract.DeprecationStatus.DEPRECATED,
+            deprecation_reason="Contract is end-of-life.",
+        )
+
+        url = reverse("contract-list")
+        response = authenticated_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert "warnings" in response.data
+        assert response.data["warnings"] == [
+            {"type": "deprecation", "message": "Contract is end-of-life."}
+        ]
+
+    def test_contract_detail_includes_deprecation_warning(self, authenticated_client, contract):
+        contract.deprecation_status = TrackedContract.DeprecationStatus.SUSPENDED
+        contract.deprecation_reason = "Contract has been suspended by admin."
+        contract.save(update_fields=["deprecation_status", "deprecation_reason"])
+
+        url = reverse("contract-detail", args=[contract.id])
+        response = authenticated_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["warnings"] == [
+            {
+                "type": "deprecation",
+                "message": "Contract has been suspended by admin.",
+            }
+        ]
+
 
 @pytest.mark.django_db
 class TestTeamViewSet:

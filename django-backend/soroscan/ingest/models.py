@@ -83,6 +83,11 @@ class TrackedContract(models.Model):
     Contracts registered for event indexing.
     """
 
+    class DeprecationStatus(models.TextChoices):
+        ACTIVE = "active", "Active"
+        DEPRECATED = "deprecated", "Deprecated"
+        SUSPENDED = "suspended", "Suspended"
+
     contract_id = models.CharField(
         max_length=56,
         unique=True,
@@ -117,6 +122,17 @@ class TrackedContract(models.Model):
         help_text="Last ledger sequence that was indexed for this contract",
     )
     is_active = models.BooleanField(default=True, help_text="Whether indexing is active")
+    deprecation_status = models.CharField(
+        max_length=16,
+        choices=DeprecationStatus.choices,
+        default=DeprecationStatus.ACTIVE,
+        db_index=True,
+        help_text="Manual lifecycle/deprecation state for warning users",
+    )
+    deprecation_reason = models.TextField(
+        blank=True,
+        help_text="Optional reason shown to users when contract is deprecated/suspended",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -128,6 +144,16 @@ class TrackedContract(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.contract_id[:8]}...)"
+
+    def deprecation_warning(self) -> dict[str, str] | None:
+        if self.deprecation_status == self.DeprecationStatus.ACTIVE:
+            return None
+        status_label = self.get_deprecation_status_display().lower()
+        if self.deprecation_reason:
+            message = self.deprecation_reason
+        else:
+            message = f"This contract is {status_label}."
+        return {"type": "deprecation", "message": message}
 
 
 class ContractInvocation(models.Model):

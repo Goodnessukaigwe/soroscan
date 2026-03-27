@@ -48,6 +48,8 @@ class ContractType:
     name: auto
     description: auto
     is_active: auto
+    deprecation_status: auto
+    deprecation_reason: auto
     created_at: auto
 
     @strawberry.field
@@ -58,6 +60,24 @@ class ContractType:
     @strawberry.field
     def event_count(self) -> int:
         return self.events.count()
+
+    @strawberry.field
+    def warnings(self) -> list["WarningType"]:
+        warning = self.deprecation_warning()
+        if warning is None:
+            return []
+        return [
+            WarningType(
+                warning_type=warning["type"],
+                message=warning["message"],
+            )
+        ]
+
+
+@strawberry.type
+class WarningType:
+    warning_type: str = strawberry.field(name="type")
+    message: str
 
 
 @strawberry_django.type(ContractEvent)
