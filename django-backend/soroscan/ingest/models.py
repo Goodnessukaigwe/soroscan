@@ -6,6 +6,7 @@ import secrets
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.utils.text import slugify
 
@@ -437,6 +438,11 @@ class WebhookSubscription(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     last_triggered = models.DateTimeField(null=True, blank=True)
     failure_count = models.PositiveIntegerField(default=0)
+    timeout_seconds = models.IntegerField(
+        default=10,
+        validators=[MinValueValidator(1), MaxValueValidator(60)],
+        help_text="Timeout for webhook dispatch in seconds (1-60, default: 10)",
+    )
 
     class Meta:
         ordering = ["-created_at"]

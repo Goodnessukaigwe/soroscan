@@ -4,6 +4,7 @@ Tests for Celery tasks — webhook dispatch, retry logic, HMAC signing, suspensi
 import hashlib
 import hmac
 from datetime import timedelta
+from unittest.mock import Mock, patch
 
 import pytest
 import requests
@@ -401,6 +402,79 @@ class TestDispatchWebhookEdgeCases:
 # ---------------------------------------------------------------------------
 # process_new_event
 # ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestDispatchWebhookTimeout:
+    """Tests for configurable per-subscription timeout functionality."""
+
+    @responses.activate
+    def test_timeout_uses_subscription_timeout_seconds(self, webhook, event):
+        """Verify that requests.post is called with subscription.timeout_seconds."""
+        webhook.timeout_seconds = 30
+        webhook.save()
+
+        responses.add(responses.POST, webhook.target_url, status=200)
+
+        # Mock the requests.post to track the timeout argument
+        with patch("soroscan.ingest.tasks.requests.post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_post.return_value = mock_response
+
+            dispatch_webhook.apply(args=[webhook.id, event.id])
+
+            # Verify post was called with the correct timeout
+            mock_post.assert_called_once()
+            call_kwargs = mock_post.call_args.kwargs
+            assert call_kwargs["timeout"] == 30
+
+    def test_timeout_exception_logged_as_504(self, webhook, event):
+        """Verify that requests.Timeout is logged as a 504 status code."""
+        # Use patch to simulate a timeout
+        with patch("soroscan.ingest.tasks.requests.post") as mock_post:
+            mock_post.side_effect = requests.exceptions.Timeout("Connection timed out")
+
+            # When throw=True, Celery raises a Retry exception for retryable errors
+            with pytest.raises(Retry):
+                dispatch_webhook.apply(args=[webhook.id, event.id], throw=True)
+
+            # Check that the delivery log has 504 status code and not success
+            log = WebhookDeliveryLog.objects.get(subscription=webhook, event=event)
+            assert log.status_code == 504
+            assert log.success is False
+            assert "Timeout" in log.error
+
+    def test_default_timeout_is_ten_seconds(self, webhook):
+        """Verify default timeout_seconds is 10."""
+        assert webhook.timeout_seconds == 10
+
+    def test_timeout_field_validates_min_max(self, contract):
+        """Verify MinValueValidator(1) and MaxValueValidator(60)."""
+        from django.core.exceptions import ValidationError
+
+        # Valid: 1
+        webhook = WebhookSubscription(
+            contract=contract,
+            target_url="https://example.com/webhook",
+            secret="test-secret-hex",
+            timeout_seconds=1,
+        )
+        webhook.full_clean()  # Should not raise
+
+        # Valid: 60
+        webhook.timeout_seconds = 60
+        webhook.full_clean()  # Should not raise
+
+        # Invalid: 0
+        webhook.timeout_seconds = 0
+        with pytest.raises(ValidationError):
+            webhook.full_clean()
+
+        # Invalid: 61
+        webhook.timeout_seconds = 61
+        with pytest.raises(ValidationError):
+            webhook.full_clean()
+
 
 @pytest.mark.django_db
 class TestProcessNewEvent:

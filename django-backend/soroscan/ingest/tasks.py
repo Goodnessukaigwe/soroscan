@@ -459,7 +459,7 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
             webhook.target_url,
             data=payload_bytes,
             headers=headers,
-            timeout=10,
+            timeout=webhook.timeout_seconds,
         )
         status_code = response.status_code
 
@@ -506,6 +506,23 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
 
         _on_delivery_failure(webhook, self)
         response.raise_for_status()
+
+    except requests.exceptions.Timeout as exc:
+        # Log timeout as 504 Gateway Timeout
+        if not attempt_logged:
+            _log_delivery_attempt(webhook, event, attempt_number, 504, False, "Timeout exceeded")
+            attempt_logged = True
+            _on_delivery_failure(webhook, self)
+
+        logger.warning(
+            "Webhook %s dispatch timed out (attempt %s/%s) after %d seconds",
+            subscription_id,
+            attempt_number,
+            self.max_retries + 1,
+            webhook.timeout_seconds,
+            extra={"webhook_id": subscription_id},
+        )
+        raise
 
     except requests.RequestException as exc:
         if not attempt_logged:
