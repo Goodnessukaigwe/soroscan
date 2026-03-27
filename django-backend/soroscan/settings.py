@@ -237,6 +237,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "soroscan.ingest.tasks.cleanup_webhook_delivery_logs",
         "schedule": 86400,  # daily
     },
+    "cleanup-old-dedup-logs": {
+        "task": "soroscan.ingest.tasks.cleanup_old_dedup_logs",
+        "schedule": 86400,  # daily
+    },
     "cleanup-silk-data": {
         "task": "soroscan.ingest.tasks.cleanup_silk_data",
         "schedule": 604800,  # weekly
@@ -250,6 +254,10 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 300,  # every 5 minutes
     },
 }
+
+# Data Retention Configuration
+# Number of days to retain deduplication logs before cleanup
+DEDUP_LOG_RETENTION_DAYS = env("DEDUP_LOG_RETENTION_DAYS", default=90, cast=int)
 
 # Stellar / Soroban Configuration
 SOROBAN_RPC_URL = env("SOROBAN_RPC_URL", default="https://soroban-testnet.stellar.org")

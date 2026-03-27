@@ -635,6 +635,45 @@ def cleanup_webhook_delivery_logs() -> int:
 
 
 @shared_task
+def cleanup_old_dedup_logs(dry_run: bool = False) -> int:
+    """
+    Prune ``EventDeduplicationLog`` entries older than the configured retention period (TTL cleanup).
+    
+    Args:
+        dry_run: If True, calculate count but don't delete records.
+    
+    Returns:
+        Number of records that were (or would be) deleted.
+    """
+    from django.conf import settings
+    from .models import EventDeduplicationLog
+
+    _start = time.monotonic()
+    retention_days = getattr(settings, "DEDUP_LOG_RETENTION_DAYS", 90)
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    
+    # Get the count of records that would be deleted
+    records_to_delete = EventDeduplicationLog.objects.filter(created_at__lt=cutoff)
+    deleted_count = records_to_delete.count()
+    
+    if not dry_run:
+        # Actually delete the records
+        deleted_count, _ = records_to_delete.delete()
+    
+    logger.info(
+        "Pruned %d EventDeduplicationLog entries older than %d days (dry_run=%s)",
+        deleted_count,
+        retention_days,
+        dry_run,
+        extra={"deletion_count": deleted_count, "retention_days": retention_days, "dry_run": dry_run},
+    )
+    _get_metrics().task_duration_seconds.labels(
+        task_name="cleanup_old_dedup_logs"
+    ).observe(time.monotonic() - _start)
+    return deleted_count
+
+
+@shared_task
 def process_new_event(event_data: dict[str, Any]) -> None:
     """
     Process a newly indexed event and trigger webhooks.
