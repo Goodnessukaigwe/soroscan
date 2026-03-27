@@ -534,6 +534,62 @@ class WebhookDeliveryLog(models.Model):
         return f"Delivery #{self.attempt_number} [{status_label}] sub={self.subscription_id}"
 
 
+class EventDeduplicationLog(models.Model):
+    """
+    Audit log for event deduplication attempts.
+
+    Records are subject to a 90-day TTL: the ``cleanup_old_dedup_logs``
+    Celery task (scheduled via Celery Beat) prunes entries older than 90 days.
+    """
+
+    contract = models.ForeignKey(
+        TrackedContract,
+        on_delete=models.CASCADE,
+        related_name="dedup_logs",
+        help_text="Contract the event belongs to",
+    )
+    ledger = models.PositiveBigIntegerField(
+        db_index=True,
+        help_text="Ledger sequence number",
+    )
+    event_index = models.PositiveIntegerField(
+        help_text="0-based event index within the ledger",
+    )
+    tx_hash = models.CharField(
+        max_length=64,
+        help_text="Transaction hash",
+    )
+    event_type = models.CharField(
+        max_length=100,
+        help_text="Event type that was checked",
+    )
+    duplicate_detected = models.BooleanField(
+        default=False,
+        help_text="True if a duplicate was detected",
+    )
+    reason = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Reason for the deduplication decision",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text="UTC timestamp of this deduplication check",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["contract", "created_at"]),
+            models.Index(fields=["contract", "ledger", "event_index"]),
+        ]
+
+    def __str__(self):
+        status = "DUP" if self.duplicate_detected else "NEW"
+        return f"[{status}] {self.event_type}@{self.ledger} ({self.contract.name})"
+
+
 class IndexerState(models.Model):
     """
     Tracks the current indexing state (cursor position).

@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+from datetime import timedelta
 
 from django.conf import settings
 from django.db.models import Count, Max, Q
@@ -24,7 +25,7 @@ import requests as http_requests
 
 from soroscan.throttles import IngestRateThrottle
 
-from .cache_utils import get_or_set_json, query_cache_ttl, stable_cache_key
+from .cache_utils import cache_result, get_or_set_json, query_cache_ttl, stable_cache_key
 from .models import (
     APIKey,
     AdminAction,
@@ -682,6 +683,48 @@ def record_event_view(request):
 def health_check(request):
     """Health check endpoint."""
     return Response({"status": "healthy", "service": "soroscan"})
+
+
+@extend_schema(
+    responses=inline_serializer(
+        name="ContractStatusResponse",
+        fields={
+            "total_contracts": serializers.IntegerField(),
+            "active_contracts": serializers.IntegerField(),
+            "paused_contracts": serializers.IntegerField(),
+            "total_events_indexed": serializers.IntegerField(),
+            "last_event_timestamp": serializers.DateTimeField(allow_null=True),
+            "events_per_minute": serializers.IntegerField(),
+        },
+    )
+)
+@api_view(["GET"])
+@cache_result(ttl=60)
+def contract_status(request):
+    """Return aggregate contract and event indexing snapshot statistics."""
+    contract_agg = TrackedContract.objects.aggregate(
+        total_contracts=Count("id"),
+        active_contracts=Count("id", filter=Q(is_active=True)),
+        paused_contracts=Count("id", filter=Q(is_active=False)),
+    )
+
+    one_minute_ago = timezone.now() - timedelta(seconds=60)
+    event_agg = ContractEvent.objects.aggregate(
+        total_events_indexed=Count("id"),
+        last_event_timestamp=Max("timestamp"),
+        events_per_minute=Count("id", filter=Q(timestamp__gte=one_minute_ago)),
+    )
+
+    return Response(
+        {
+            "total_contracts": contract_agg["total_contracts"] or 0,
+            "active_contracts": contract_agg["active_contracts"] or 0,
+            "paused_contracts": contract_agg["paused_contracts"] or 0,
+            "total_events_indexed": event_agg["total_events_indexed"] or 0,
+            "last_event_timestamp": event_agg["last_event_timestamp"],
+            "events_per_minute": event_agg["events_per_minute"] or 0,
+        }
+    )
 
 
 def contract_timeline_view(request, contract_id: str):
