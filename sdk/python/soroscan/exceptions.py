@@ -10,7 +10,12 @@ class SoroScanError(Exception):
 class SoroScanAPIError(SoroScanError):
     """Raised when the API returns an error response."""
 
-    def __init__(self, message: str, status_code: int, response_data: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int,
+        response_data: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.response_data = response_data or {}

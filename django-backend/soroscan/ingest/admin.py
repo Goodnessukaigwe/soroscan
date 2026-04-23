@@ -19,11 +19,15 @@ from .models import (
     ArchivedEventBatch,
     ContractABI,
     ContractEvent,
+    ContractMetadata,
     ContractSigningKey,
     ContractQuota,
     DataRetentionPolicy,
     EventSchema,
     IndexerState,
+    IngestError,
+    Organization,
+    OrganizationMembership,
     RemediationIncident,
     RemediationRule,
     Team,
@@ -96,7 +100,7 @@ class AdminAuditMixin:
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ["name", "slug", "created_by", "created_at"]
+    list_display = ["name", "organization", "slug", "created_by", "created_at"]
     search_fields = ["name", "slug"]
     prepopulated_fields = {"slug": ("name",)}
 
@@ -108,26 +112,71 @@ class TeamMembershipAdmin(admin.ModelAdmin):
     search_fields = ["team__name", "user__username"]
 
 
+@admin.register(Organization)
+class OrganizationAdmin(admin.ModelAdmin):
+    list_display = ["name", "slug", "owner", "quota", "created_at"]
+    search_fields = ["name", "slug", "owner__username"]
+    readonly_fields = ["created_at", "updated_at"]
+
+
+@admin.register(OrganizationMembership)
+class OrganizationMembershipAdmin(admin.ModelAdmin):
+    list_display = ["organization", "user", "role", "invited_by", "joined_at"]
+    list_filter = ["role"]
+    search_fields = ["organization__name", "user__username"]
+
+
 
 @admin.register(TrackedContract)
 class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
     list_display = [
         "name",
+        "alias",
         "contract_id_short",
         "owner",
         "team",
         "is_active",
         "deprecation_status",
+        "event_filter_type",
+        "max_events_per_minute",
         "last_indexed_ledger",
         "event_count",
         "created_at",
     ]
-    list_filter = ["is_active", "deprecation_status", "created_at"]
-    search_fields = ["name", "contract_id"]
+    list_filter = ["is_active", "deprecation_status", "event_filter_type", "created_at"]
+    search_fields = ["name", "alias", "contract_id"]
     readonly_fields = ["created_at", "updated_at"]
     ordering = ["-created_at"]
     action_form = BackfillActionForm
     actions = ["backfill_events"]
+    fieldsets = (
+        (None, {
+            "fields": (
+                "contract_id", "name", "alias", "description",
+                "owner", "team", "is_active",
+            ),
+        }),
+        ("Event Filtering", {
+            "fields": ("event_filter_type", "event_filter_list"),
+            "description": (
+                "Control which event types are persisted at ingest time. "
+                "Whitelist: only listed types are stored. "
+                "Blacklist: listed types are dropped."
+            ),
+        }),
+        ("Advanced", {
+            "fields": (
+                "deprecation_status", "deprecation_reason",
+                "max_events_per_minute", "abi_schema", "json_schema",
+                "last_indexed_ledger",
+            ),
+            "classes": ("collapse",),
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+            "classes": ("collapse",),
+        }),
+    )
 
     @admin.display(description="Contract ID")
     def contract_id_short(self, obj):
@@ -415,7 +464,7 @@ class WebhookSubscriptionAdmin(AdminAuditMixin, admin.ModelAdmin):
         "failure_count",
         "last_delivery_status",
     ]
-    list_filter = ["is_active", "status", "contract", "created_at"]
+    list_filter = ["is_active", "status", "contract", "created_at", "retry_backoff_strategy"]
     search_fields = ["target_url", "contract__name", "event_type"]
     readonly_fields = ["secret", "created_at", "last_triggered", "failure_count", "status"]
     fieldsets = (
@@ -423,7 +472,12 @@ class WebhookSubscriptionAdmin(AdminAuditMixin, admin.ModelAdmin):
             "fields": ("contract", "target_url", "event_type", "is_active"),
         }),
         ("Configuration", {
-            "fields": ("timeout_seconds",),
+            "fields": ("timeout_seconds", "signature_algorithm", "filter_condition"),
+        }),
+        ("Retry Configuration", {
+            "fields": ("retry_backoff_strategy", "retry_backoff_seconds"),
+            "description": "Configure how the webhook retries failed deliveries. "
+                          "Exponential: base * 2^attempt | Linear: base * attempt | Fixed: base",
         }),
         ("Status", {
             "fields": ("status", "failure_count", "last_triggered"),
@@ -840,3 +894,48 @@ class AdminActionAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+
+@admin.register(IngestError)
+class IngestErrorAdmin(admin.ModelAdmin):
+    list_display = ["created_at", "error_type", "contract_id", "sample_error", "ledger"]
+    list_filter = ["error_type", "created_at"]
+    search_fields = ["contract_id", "error_message", "tx_hash"]
+    readonly_fields = ["created_at", "sample_error"]
+    ordering = ["-created_at"]
+    
+    def has_add_permission(self, request):
+        return False
+    
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+
+# ---------------------------------------------------------------------------
+# Contract Metadata Registry
+# ---------------------------------------------------------------------------
+
+class TagListFilter(admin.SimpleListFilter):
+    title = "tags"
+    parameter_name = "tags"
+
+    def lookups(self, request, model_admin):
+        return [
+            ("has_tags", "Has Tags"),
+            ("no_tags", "No Tags"),
+        ]
+
+    def queryset(self, request, queryset):
+        if self.value() == "has_tags":
+            return queryset.exclude(tags=[])
+        if self.value() == "no_tags":
+            return queryset.filter(tags=[])
+        return queryset
+
+
+@admin.register(ContractMetadata)
+class ContractMetadataAdmin(AdminAuditMixin, admin.ModelAdmin):
+    list_display = ["contract", "name", "tags", "documentation_url", "github_repo", "team_email"]
+    search_fields = ["name", "description", "tags"]
+    list_filter = [TagListFilter]
+    readonly_fields = ["created_at", "updated_at"]

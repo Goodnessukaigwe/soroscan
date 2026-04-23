@@ -35,15 +35,15 @@ async def test_async_get_contracts(
     """Test async listing contracts."""
     response_data = sample_paginated_response.copy()
     response_data["results"] = [sample_contract_data]
-    
+
     httpx_mock.add_response(
         url=f"{base_url}/api/contracts/?page=1&page_size=50",
         json=response_data,
     )
-    
+
     async with AsyncSoroScanClient(base_url=base_url) as client:
         result = await client.get_contracts()
-        
+
         assert result.count == 100
         assert len(result.results) == 1
         assert isinstance(result.results[0], TrackedContract)
@@ -61,10 +61,10 @@ async def test_async_get_contract(
         url=f"{base_url}/api/contracts/1/",
         json=sample_contract_data,
     )
-    
+
     async with AsyncSoroScanClient(base_url=base_url) as client:
         contract = await client.get_contract("1")
-        
+
         assert isinstance(contract, TrackedContract)
         assert contract.id == 1
         assert contract.name == "Test Token"
@@ -82,14 +82,14 @@ async def test_async_create_contract(
         json=sample_contract_data,
         status_code=201,
     )
-    
+
     async with AsyncSoroScanClient(base_url=base_url) as client:
         contract = await client.create_contract(
             contract_id="CCAAA111222333444555666777888999AAABBBCCCDDDEEEFFF",
             name="Test Token",
             description="A test token contract",
         )
-        
+
         assert isinstance(contract, TrackedContract)
         assert contract.name == "Test Token"
 
@@ -104,18 +104,22 @@ async def test_async_get_events(
     """Test async querying events."""
     response_data = sample_paginated_response.copy()
     response_data["results"] = [sample_event_data]
-    
+
     httpx_mock.add_response(
-        url=f"{base_url}/api/events/",
+        url=(
+            f"{base_url}/api/events/?page=1&page_size=50&ordering=-timestamp"
+            "&contract__contract_id=CCAAA111222333444555666777888999AAABBBCCCDDDEEEFFF"
+            "&event_type=transfer"
+        ),
         json=response_data,
     )
-    
+
     async with AsyncSoroScanClient(base_url=base_url) as client:
         result = await client.get_events(
             contract_id="CCAAA111222333444555666777888999AAABBBCCCDDDEEEFFF",
             event_type="transfer",
         )
-        
+
         assert result.count == 100
         assert len(result.results) == 1
         assert isinstance(result.results[0], ContractEvent)
@@ -134,20 +138,20 @@ async def test_async_record_event(
         "transaction_status": "pending",
         "error": None,
     }
-    
+
     httpx_mock.add_response(
         url=f"{base_url}/api/record-event/",
         json=response_data,
         status_code=202,
     )
-    
+
     async with AsyncSoroScanClient(base_url=base_url) as client:
         result = await client.record_event(
             contract_id="CCAAA111222333444555666777888999AAABBBCCCDDDEEEFFF",
             event_type="transfer",
             payload_hash="abc123def456",
         )
-        
+
         assert result.status == "submitted"
         assert result.tx_hash == "tx123456"
 
@@ -163,11 +167,11 @@ async def test_async_error_handling(
         json={"detail": "Not found"},
         status_code=404,
     )
-    
+
     async with AsyncSoroScanClient(base_url=base_url) as client:
         with pytest.raises(SoroScanNotFoundError) as exc_info:
             await client.get_contract("999")
-        
+
         assert exc_info.value.status_code == 404
 
 
@@ -179,7 +183,7 @@ async def test_async_concurrent_requests(
 ) -> None:
     """Test concurrent async requests."""
     import asyncio
-    
+
     # Mock multiple contract responses
     for i in range(1, 4):
         data = sample_contract_data.copy()
@@ -189,12 +193,12 @@ async def test_async_concurrent_requests(
             url=f"{base_url}/api/contracts/{i}/",
             json=data,
         )
-    
+
     async with AsyncSoroScanClient(base_url=base_url) as client:
         # Fetch multiple contracts concurrently
         tasks = [client.get_contract(str(i)) for i in range(1, 4)]
         contracts = await asyncio.gather(*tasks)
-        
+
         assert len(contracts) == 3
         assert contracts[0].name == "Contract 1"
         assert contracts[1].name == "Contract 2"

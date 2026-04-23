@@ -8,10 +8,13 @@ from .views import (
     APIKeyViewSet,
     ContractEventViewSet,
     ContractInvocationViewSet,
+    OrganizationViewSet,
     TeamViewSet,
     TrackedContractViewSet,
+    admin_ingest_errors_view,
     audit_trail_view,
     contract_event_explorer_view,
+    contract_event_types_view,
     WebhookSubscriptionViewSet,
     contract_timeline_view,
     health_check,
@@ -25,6 +28,7 @@ router.register(r"events", ContractEventViewSet, basename="event")
 router.register(r"invocations", ContractInvocationViewSet, basename="invocation")
 router.register(r"webhooks", WebhookSubscriptionViewSet, basename="webhook")
 router.register(r"api-keys", APIKeyViewSet, basename="apikey")
+router.register(r"organizations", OrganizationViewSet, basename="organization")
 router.register(r"teams", TeamViewSet, basename="team")
 
 urlpatterns = [
@@ -34,9 +38,15 @@ urlpatterns = [
         contract_event_explorer_view,
         name="contract-event-explorer",
     ),
+    path(
+        "contracts/<str:contract_id>/event-types/",
+        contract_event_types_view,
+        name="contract-event-types",
+    ),
     path("", include(router.urls)),
     path("record/", record_event_view, name="record-event"),
     path("health/", health_check, name="health-check"),
     path("events/restore-archive/", restore_archived_events, name="restore-archive"),
     path("audit-trail/", audit_trail_view, name="audit-trail"),
+    path("admin/ingest-errors/", admin_ingest_errors_view, name="admin-ingest-errors"),
 ]

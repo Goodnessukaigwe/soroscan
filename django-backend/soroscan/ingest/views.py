@@ -5,10 +5,11 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max, Min, Q
 from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
@@ -29,19 +30,23 @@ from .cache_utils import cache_result, get_or_set_json, query_cache_ttl, stable_
 from .models import (
     APIKey,
     AdminAction,
+    ArchivedEventBatch,
     ContractEvent,
     ContractInvocation,
+    IngestError,
+    Organization,
+    OrganizationMembership,
     Team,
     TeamMembership,
     TrackedContract,
     WebhookSubscription,
-    ArchivedEventBatch,
 )
 from .serializers import (
     APIKeySerializer,
     ContractEventSerializer,
     ContractInvocationSerializer,
     EventSearchSerializer,
+    OrganizationSerializer,
     RecordEventRequestSerializer,
     TeamMemberAddSerializer,
     TeamSerializer,
@@ -74,6 +79,52 @@ def _frontend_base_url() -> str:
     return getattr(settings, "FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
 
 
+class OrganizationViewSet(viewsets.ModelViewSet):
+    """Manage organizations and members."""
+
+    serializer_class = OrganizationSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [OrderingFilter]
+    ordering_fields = ["name", "created_at"]
+    ordering = ["name"]
+
+    def get_queryset(self):
+        return Organization.objects.filter(memberships__user=self.request.user).distinct()
+
+    @action(detail=True, methods=["post"], url_path="members")
+    def members(self, request, pk=None):
+        organization = self.get_object()
+        can_manage = OrganizationMembership.objects.filter(
+            organization=organization,
+            user=request.user,
+            role__in=[OrganizationMembership.Role.OWNER, OrganizationMembership.Role.ADMIN],
+        ).exists()
+        if not can_manage:
+            return Response(
+                {"detail": "Only organization owners/admins can add members."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ser = TeamMemberAddSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        try:
+            target_user = User.objects.get(pk=ser.validated_data["user_id"])
+        except User.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        _, created = OrganizationMembership.objects.get_or_create(
+            organization=organization,
+            user=target_user,
+            defaults={"role": ser.validated_data["role"], "invited_by": request.user},
+        )
+        if not created:
+            return Response({"status": "already_member"}, status=status.HTTP_200_OK)
+        return Response({"status": "created"}, status=status.HTTP_201_CREATED)
+
+
 class TrackedContractViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing tracked contracts.
@@ -92,8 +143,8 @@ class TrackedContractViewSet(viewsets.ModelViewSet):
     serializer_class = TrackedContractSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ["is_active"]
-    search_fields = ["name", "contract_id"]
-    ordering_fields = ["created_at", "name"]
+    search_fields = ["name", "alias", "contract_id"]
+    ordering_fields = ["created_at", "name", "alias"]
     ordering = ["-created_at"]
 
     @staticmethod
@@ -125,7 +176,11 @@ class TrackedContractViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if self.request.method in ["GET", "HEAD", "OPTIONS"]:
             if user.is_authenticated:
-                return qs.filter(Q(owner=user) | Q(team__memberships__user=user)).distinct()
+                return qs.filter(
+                    Q(owner=user)
+                    | Q(team__memberships__user=user)
+                    | Q(organization__memberships__user=user)
+                ).distinct()
             return qs
         return qs.filter(owner=self.request.user)
 
@@ -165,10 +220,10 @@ class TrackedContractViewSet(viewsets.ModelViewSet):
                 total_events=Count("id"),
                 unique_event_types=Count("event_type", distinct=True),
                 latest_ledger=Max("ledger"),
-                last_activity=Max("timestamp"),
             )
             agg["contract_id"] = contract.contract_id
             agg["name"] = contract.name
+            agg["last_activity"] = contract.last_event_at
             return agg
 
         stats = get_or_set_json(cache_key, query_cache_ttl(), _build)
@@ -444,15 +499,22 @@ class WebhookSubscriptionViewSet(viewsets.ModelViewSet):
             "timestamp": timezone.now().isoformat(),
         }
         payload_bytes = json.dumps(test_payload, sort_keys=True).encode("utf-8")
+        algorithm = (webhook.signature_algorithm or WebhookSubscription.SIGNATURE_SHA256).lower()
+        if algorithm == WebhookSubscription.SIGNATURE_SHA1:
+            digestmod = hashlib.sha1
+            prefix = "sha1"
+        else:
+            digestmod = hashlib.sha256
+            prefix = "sha256"
         sig_hex = hmac.new(
             webhook.secret.encode("utf-8"),
             msg=payload_bytes,
-            digestmod=hashlib.sha256,
+            digestmod=digestmod,
         ).hexdigest()
 
         headers = {
             "Content-Type": "application/json",
-            "X-SoroScan-Signature": f"sha256={sig_hex}",
+            "X-SoroScan-Signature": f"{prefix}={sig_hex}",
             "X-SoroScan-Timestamp": timezone.now().isoformat(),
         }
 
@@ -473,6 +535,40 @@ class WebhookSubscriptionViewSet(viewsets.ModelViewSet):
 
         return Response({"status": "test_webhook_queued"})
 
+    @extend_schema(
+        request=inline_serializer(
+            name="WebhookConditionDryRunRequest",
+            fields={
+                "sample_event": serializers.JSONField(),
+            },
+        ),
+        responses={
+            200: inline_serializer(
+                name="WebhookConditionDryRunResponse",
+                fields={
+                    "matched": serializers.BooleanField(),
+                },
+            )
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="dry-run")
+    def dry_run(self, request, pk=None):
+        webhook = self.get_object()
+        sample_event = request.data.get("sample_event")
+        if not isinstance(sample_event, dict):
+            return Response(
+                {"detail": "sample_event must be an object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not webhook.filter_condition:
+            return Response({"matched": True})
+
+        from .tasks import evaluate_condition
+
+        matched = evaluate_condition(webhook.filter_condition, sample_event)
+        return Response({"matched": bool(matched)})
+
 
 class TeamViewSet(viewsets.ModelViewSet):
     """
@@ -490,7 +586,10 @@ class TeamViewSet(viewsets.ModelViewSet):
     ordering = ["name"]
 
     def get_queryset(self):
-        return Team.objects.filter(memberships__user=self.request.user).distinct()
+        return Team.objects.filter(
+            Q(memberships__user=self.request.user)
+            | Q(organization__memberships__user=self.request.user)
+        ).distinct()
 
     @extend_schema(
         request=TeamMemberAddSerializer,
@@ -507,7 +606,7 @@ class TeamViewSet(viewsets.ModelViewSet):
         admin = TeamMembership.objects.filter(
             team=team,
             user=request.user,
-            role=TeamMembership.Role.ADMIN,
+            role__in=[TeamMembership.Role.OWNER, TeamMembership.Role.ADMIN],
         ).exists()
         if not admin:
             return Response(
@@ -741,6 +840,30 @@ def contract_event_explorer_view(request, contract_id: str):
     return redirect(f"{frontend_base}/contracts/{contract.contract_id}/events/explorer")
 
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def contract_event_types_view(request, contract_id: str):
+    """Get event types and their counts for a specific contract."""
+    contract = get_object_or_404(TrackedContract, contract_id=contract_id)
+    
+    cache_key = stable_cache_key("contract_event_types", {"contract_id": contract_id})
+    
+    def _build():
+        return list(
+            ContractEvent.objects.filter(contract=contract)
+            .values("event_type")
+            .annotate(
+                count=Count("id"),
+                first_seen=Min("timestamp"),
+                last_seen=Max("timestamp")
+            )
+            .order_by("-count")
+        )
+    
+    result = get_or_set_json(cache_key, 60, _build)
+    return Response(result)
+
+
 @extend_schema(
     parameters=[
         inline_serializer(
@@ -902,3 +1025,92 @@ def audit_trail_view(request):
 
     serializer = AdminActionSerializer(qs[:limit], many=True)
     return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_ingest_errors_view(request):
+    """Get recent ingest errors (admin only)."""
+    if not request.user.is_staff:
+        return Response({"error": "Admin access required"}, status=status.HTTP_403_FORBIDDEN)
+    
+    # Last 24 hours
+    since = timezone.now() - timezone.timedelta(hours=24)
+    
+    # Group by error_type + contract_id and aggregate
+    errors = (
+        IngestError.objects.filter(created_at__gte=since)
+        .values("error_type", "contract_id")
+        .annotate(
+            count=Count("id"),
+            last_occurrence=Max("created_at"),
+            sample_error=Max("sample_error")  # Get one sample error message
+        )
+        .order_by("-count")
+    )
+    
+    return Response(list(errors))
+
+
+@extend_schema(
+    responses=inline_serializer(
+        name="RateLimitAnalyticsResponse",
+        fields={
+            "window_hours": serializers.IntegerField(),
+            "generated_at": serializers.DateTimeField(),
+            "api_keys": serializers.JSONField(),
+        },
+    )
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def rate_limit_analytics_view(request):
+    """Return 7-day API key usage analytics from Redis-backed counters."""
+    from django.core.cache import cache
+    from soroscan.throttles import _BUCKET_TTL
+
+    now_bucket = int(time.time()) // _BUCKET_TTL
+    window_hours = 24 * 7
+    keys = APIKey.objects.filter(user=request.user, is_active=True).order_by("name")
+    results = []
+
+    for key in keys:
+        hourly_hits = []
+        overages = 0
+        for offset in range(window_hours - 1, -1, -1):
+            bucket = now_bucket - offset
+            history_key = f"soroscan_api_key_quota_history:{key.id}:{bucket}"
+            hits = int(cache.get(history_key, 0) or 0)
+            if hits > key.quota_per_hour:
+                overages += 1
+            hourly_hits.append(hits)
+
+        total_hits = sum(hourly_hits)
+        avg_hits = (total_hits / window_hours) if window_hours else 0.0
+        quota = key.quota_per_hour
+        quota_used_percent = (avg_hits / quota * 100.0) if quota > 0 else 0.0
+        projected_next_24h_hits = int(round(avg_hits * 24))
+        projected_overage = projected_next_24h_hits > quota
+
+        results.append(
+            {
+                "api_key_id": key.id,
+                "name": key.name,
+                "tier": key.tier,
+                "quota_per_hour": quota,
+                "hourly_hits": hourly_hits,
+                "avg_hits_per_hour": round(avg_hits, 2),
+                "quota_used_percent": round(quota_used_percent, 2),
+                "overage_events": overages,
+                "projected_next_24h_hits": projected_next_24h_hits,
+                "projected_overage": projected_overage,
+            }
+        )
+
+    return Response(
+        {
+            "window_hours": window_hours,
+            "generated_at": timezone.now(),
+            "api_keys": results,
+        }
+    )

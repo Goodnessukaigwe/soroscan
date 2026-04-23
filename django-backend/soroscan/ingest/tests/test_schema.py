@@ -288,6 +288,7 @@ class TestGraphQLQueries:
                 contractStats(contractId: "{contract.contract_id}") {{
                     totalEvents
                     uniqueEventTypes
+                    lastActivity
                 }}
             }}
         """
@@ -295,6 +296,7 @@ class TestGraphQLQueries:
         assert result.errors is None
         assert result.data["contractStats"]["totalEvents"] == 3
         assert result.data["contractStats"]["uniqueEventTypes"] == 2
+        assert "lastActivity" in result.data["contractStats"]
 
     def test_query_event_types(self, contract):
         ContractEventFactory(contract=contract, event_type="transfer")
@@ -509,7 +511,7 @@ class TestGraphQLQueries:
 
         query = """
             query {
-                events(ledgerMin: 150, ledgerMax: 250) {
+                events(fromLedger: 150, toLedger: 250) {
                     edges { node { id } }
                     totalCount
                 }
@@ -530,8 +532,8 @@ class TestGraphQLQueries:
                 events(
                     contractId: "{contract.contract_id}",
                     eventType: "transfer",
-                    ledgerMin: 50,
-                    ledgerMax: 150
+                    fromLedger: 50,
+                    toLedger: 150
                 ) {{
                     edges {{ node {{ id }} }}
                     totalCount

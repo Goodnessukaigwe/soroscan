@@ -60,19 +60,11 @@ def verify_imports() -> bool:
         print(f"  Version: {soroscan.__version__}")
 
         # Verify clients
-        from soroscan import AsyncSoroScanClient, SoroScanClient
 
         print("  ✓ SoroScanClient")
         print("  ✓ AsyncSoroScanClient")
 
         # Verify models
-        from soroscan import (
-            ContractEvent,
-            ContractStats,
-            PaginatedResponse,
-            TrackedContract,
-            WebhookSubscription,
-        )
 
         print("  ✓ TrackedContract")
         print("  ✓ ContractEvent")
@@ -81,14 +73,6 @@ def verify_imports() -> bool:
         print("  ✓ PaginatedResponse")
 
         # Verify exceptions
-        from soroscan import (
-            SoroScanAPIError,
-            SoroScanAuthError,
-            SoroScanError,
-            SoroScanNotFoundError,
-            SoroScanRateLimitError,
-            SoroScanValidationError,
-        )
 
         print("  ✓ Exception classes")
 

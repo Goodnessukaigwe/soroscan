@@ -6,7 +6,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("ingest", "0016_trackedcontract_deprecation_fields"),
+        ("ingest", "0017_trackedcontract_deprecation_fields"),
         ("ingest", "0017_eventdeduplicationlog"),
     ]
 

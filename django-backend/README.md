@@ -65,6 +65,14 @@ celery -A soroscan worker -l info
 celery -A soroscan beat -l info
 ```
 
+## CDC Streaming
+
+SoroScan can publish indexed events to Kafka, Pub/Sub, or SQS for downstream warehouses.
+
+- default Kafka topic: `soroscan.events`
+- schema subject: `soroscan.events-value`
+- integration guide: `docs/cdc-streaming.md`
+
 ## Logging and Sentry
 
 - **Log format**: Set `LOG_FORMAT=json` to emit structured JSON logs (one JSON object per line). Omit or leave unset for human-readable logs. Each JSON line includes `timestamp`, `levelname`, `name` (logger), and `message`; ingest logs also include `request_id`, `contract_id`, and `ledger_sequence` when available.

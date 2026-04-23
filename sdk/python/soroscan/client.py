@@ -1,6 +1,5 @@
 """SoroScan API client implementations."""
 
-from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import urljoin
 
@@ -163,7 +162,7 @@ class SoroScanClient:
             Created contract
         """
         url = urljoin(self.base_url, "/api/contracts/")
-        payload = {
+        payload: dict[str, Any] = {
             "contract_id": contract_id,
             "name": name,
             "description": description,
@@ -439,7 +438,7 @@ class SoroScanClient:
         if response.status_code != 204:
             self._handle_response(response)
 
-    def test_webhook(self, webhook_id: int) -> dict[str, str]:
+    def test_webhook(self, webhook_id: int) -> dict[str, Any]:
         """
         Send a test webhook.
 
@@ -451,7 +450,7 @@ class SoroScanClient:
         """
         url = urljoin(self.base_url, f"/api/webhooks/{webhook_id}/test/")
         response = self._client.post(url, headers=self._get_headers())
-        return self._handle_response(response)  # type: ignore[return-value]
+        return self._handle_response(response)
 
 
 class AsyncSoroScanClient:
@@ -591,7 +590,7 @@ class AsyncSoroScanClient:
             Created contract
         """
         url = urljoin(self.base_url, "/api/contracts/")
-        payload = {
+        payload: dict[str, Any] = {
             "contract_id": contract_id,
             "name": name,
             "description": description,
@@ -869,7 +868,7 @@ class AsyncSoroScanClient:
         if response.status_code != 204:
             self._handle_response(response)
 
-    async def test_webhook(self, webhook_id: int) -> dict[str, str]:
+    async def test_webhook(self, webhook_id: int) -> dict[str, Any]:
         """
         Send a test webhook.
 
@@ -881,4 +880,4 @@ class AsyncSoroScanClient:
         """
         url = urljoin(self.base_url, f"/api/webhooks/{webhook_id}/test/")
         response = await self._client.post(url, headers=self._get_headers())
-        return self._handle_response(response)  # type: ignore[return-value]
+        return self._handle_response(response)

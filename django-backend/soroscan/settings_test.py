@@ -147,6 +147,24 @@ STELLAR_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015"
 SOROSCAN_CONTRACT_ID = "C" + "A" * 55
 INDEXER_SECRET_KEY = ""
 
+# Event Streaming Configuration (Disabled by default for tests)
+EVENT_STREAMING = {
+    "enabled": False,
+    "backend": "kafka",
+    "kafka": {
+        "bootstrap_servers": ["localhost:9092"],
+        "topic": "soroscan.events",
+        "schema_registry_url": "",
+    },
+    "pubsub": {
+        "project_id": "test-project",
+        "topic": "soroscan.events",
+    },
+    "sqs": {
+        "queue_url": "",
+    },
+}
+
 # Logging
 LOGGING = {
     "version": 1,

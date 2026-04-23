@@ -14,11 +14,13 @@ import type { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
+    "query GetSystemMetrics {\n  systemMetrics {\n    eventsIndexedToday\n    eventsIndexedTotal\n    webhookSuccessRate\n    avgWebhookDeliveryTime\n    activeContracts\n    lastSynced\n    dbStatus\n    redisStatus\n  }\n  recentErrors(limit: 10) {\n    id\n    timestamp\n    level\n    message\n    context\n  }\n}": typeof types.GetSystemMetricsDocument,
     "mutation Login($email: String!, $password: String!) {\n  login(email: $email, password: $password) {\n    access\n    refresh\n    user {\n      id\n      email\n    }\n  }\n}\n\nmutation RefreshToken($refresh: String!) {\n  refreshToken(refresh: $refresh) {\n    access\n    refresh\n  }\n}": typeof types.LoginDocument,
     "subscription OnContractEvent($contractId: String!) {\n  contractEvent(contractId: $contractId) {\n    id\n    eventType\n    ledgerSequence\n    timestamp\n    payload\n  }\n}": typeof types.OnContractEventDocument,
     "query GetEvents($contractId: String!, $first: Int!) {\n  events(contractId: $contractId, first: $first) {\n    edges {\n      node {\n        id\n        contractId\n        eventType\n        data\n        createdAt\n      }\n    }\n  }\n}": typeof types.GetEventsDocument,
 };
 const documents: Documents = {
+    "query GetSystemMetrics {\n  systemMetrics {\n    eventsIndexedToday\n    eventsIndexedTotal\n    webhookSuccessRate\n    avgWebhookDeliveryTime\n    activeContracts\n    lastSynced\n    dbStatus\n    redisStatus\n  }\n  recentErrors(limit: 10) {\n    id\n    timestamp\n    level\n    message\n    context\n  }\n}": types.GetSystemMetricsDocument,
     "mutation Login($email: String!, $password: String!) {\n  login(email: $email, password: $password) {\n    access\n    refresh\n    user {\n      id\n      email\n    }\n  }\n}\n\nmutation RefreshToken($refresh: String!) {\n  refreshToken(refresh: $refresh) {\n    access\n    refresh\n  }\n}": types.LoginDocument,
     "subscription OnContractEvent($contractId: String!) {\n  contractEvent(contractId: $contractId) {\n    id\n    eventType\n    ledgerSequence\n    timestamp\n    payload\n  }\n}": types.OnContractEventDocument,
     "query GetEvents($contractId: String!, $first: Int!) {\n  events(contractId: $contractId, first: $first) {\n    edges {\n      node {\n        id\n        contractId\n        eventType\n        data\n        createdAt\n      }\n    }\n  }\n}": types.GetEventsDocument,
@@ -38,6 +40,10 @@ const documents: Documents = {
  */
 export function gql(source: string): unknown;
 
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "query GetSystemMetrics {\n  systemMetrics {\n    eventsIndexedToday\n    eventsIndexedTotal\n    webhookSuccessRate\n    avgWebhookDeliveryTime\n    activeContracts\n    lastSynced\n    dbStatus\n    redisStatus\n  }\n  recentErrors(limit: 10) {\n    id\n    timestamp\n    level\n    message\n    context\n  }\n}"): (typeof documents)["query GetSystemMetrics {\n  systemMetrics {\n    eventsIndexedToday\n    eventsIndexedTotal\n    webhookSuccessRate\n    avgWebhookDeliveryTime\n    activeContracts\n    lastSynced\n    dbStatus\n    redisStatus\n  }\n  recentErrors(limit: 10) {\n    id\n    timestamp\n    level\n    message\n    context\n  }\n}"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

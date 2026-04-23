@@ -14,14 +14,14 @@ export default function SettingsPage() {
     }
     return 10;
   });
-  const [fontSize, setFontSize] = useState<number>(() => {
-    if (typeof window === "undefined") return 14;
+  const [fontSize, setFontSize] = useState<string>(() => {
+    if (typeof window === "undefined") return "base";
     const display = localStorage.getItem("displaySettings");
     if (display) {
       const { fontSize } = JSON.parse(display);
-      return fontSize;
+      return String(fontSize);
     }
-    return 14;
+    return "base";
   });
   const [saved, setSaved] = useState(false);
 

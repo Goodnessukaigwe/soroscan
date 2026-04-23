@@ -3,4 +3,6 @@
 ISSUES.md
 FRONTEND_ISSUES.md
 update-main.sh
-ALT_ISSUES.mdvenv/
+ALT_ISSUES.md
+venv/
+node_modules

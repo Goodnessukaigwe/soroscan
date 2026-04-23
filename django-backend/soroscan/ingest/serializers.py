@@ -5,7 +5,40 @@ from rest_framework import serializers
 
 from django.utils.text import slugify
 
-from .models import APIKey, ContractEvent, ContractInvocation, Team, TeamMembership, TrackedContract, WebhookSubscription
+from .cache_utils import get_event_count
+from .models import (
+    APIKey,
+    ContractEvent,
+    ContractInvocation,
+    Organization,
+    OrganizationMembership,
+    Team,
+    TeamMembership,
+    TrackedContract,
+    WebhookSubscription,
+)
+
+
+class OrganizationSerializer(serializers.ModelSerializer):
+    """Organization serializer with owner-managed tenancy settings."""
+
+    class Meta:
+        model = Organization
+        fields = ["id", "name", "slug", "settings", "quota", "created_at", "updated_at"]
+        read_only_fields = ["id", "slug", "created_at", "updated_at"]
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authentication required.")
+        org = Organization.objects.create(owner=user, **validated_data)
+        OrganizationMembership.objects.get_or_create(
+            organization=org,
+            user=user,
+            defaults={"role": OrganizationMembership.Role.OWNER, "invited_by": user},
+        )
+        return org
 
 
 class TeamSerializer(serializers.ModelSerializer):
@@ -13,12 +46,17 @@ class TeamSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Team
-        fields = ["id", "name", "slug", "created_at"]
+        fields = ["id", "name", "slug", "organization", "created_at"]
         read_only_fields = ["id", "slug", "created_at"]
 
     def create(self, validated_data):
         request = self.context.get("request")
         user = getattr(request, "user", None)
+        organization = validated_data.get("organization")
+        if organization is None:
+            raise serializers.ValidationError("organization is required.")
+        if not OrganizationMembership.objects.filter(organization=organization, user=user).exists():
+            raise serializers.ValidationError("You are not a member of this organization.")
         name = validated_data["name"]
         base = slugify(name) or "team"
         slug = base
@@ -34,7 +72,7 @@ class TeamSerializer(serializers.ModelSerializer):
             TeamMembership.objects.create(
                 team=team,
                 user=user,
-                role=TeamMembership.Role.ADMIN,
+                role=TeamMembership.Role.OWNER,
             )
         return team
 
@@ -62,6 +100,11 @@ class TrackedContractSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    organization = serializers.PrimaryKeyRelatedField(
+        queryset=Organization.objects.all(),
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = TrackedContract
@@ -69,22 +112,29 @@ class TrackedContractSerializer(serializers.ModelSerializer):
             "id",
             "contract_id",
             "name",
+            "alias",
             "description",
             "abi_schema",
+            "json_schema",
             "is_active",
             "deprecation_status",
             "deprecation_reason",
+            "max_events_per_minute",
+            "event_filter_type",
+            "event_filter_list",
             "last_indexed_ledger",
+            "organization",
             "team",
             "event_count",
+            "last_event_at",
             "warnings",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "last_indexed_ledger", "event_count", "warnings", "created_at", "updated_at"]
+        read_only_fields = ["id", "last_indexed_ledger", "event_count", "last_event_at", "warnings", "created_at", "updated_at"]
 
     def get_event_count(self, obj) -> int:
-        return obj.events.count()
+        return get_event_count(obj.contract_id)
 
     def get_warnings(self, obj) -> list[dict[str, str]]:
         warning = obj.deprecation_warning()
@@ -97,6 +147,25 @@ class TrackedContractSerializer(serializers.ModelSerializer):
             if not TeamMembership.objects.filter(team=value, user=user).exists():
                 raise serializers.ValidationError("You are not a member of this team.")
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        team = attrs.get("team")
+        organization = attrs.get("organization")
+
+        if organization and user and user.is_authenticated:
+            if not OrganizationMembership.objects.filter(organization=organization, user=user).exists():
+                raise serializers.ValidationError({"organization": "You are not a member of this organization."})
+
+        if team and organization and team.organization_id != organization.id:
+            raise serializers.ValidationError({"team": "Team must belong to the selected organization."})
+
+        if team and not organization:
+            attrs["organization"] = team.organization
+
+        return attrs
 
 
 class ContractEventSerializer(serializers.ModelSerializer):
@@ -176,7 +245,7 @@ class ContractInvocationSerializer(serializers.ModelSerializer):
 
     def get_events_count(self, obj) -> int:
         """Return count of related events."""
-        return obj.events.count()
+        return get_event_count(obj.contract_id)
 
 
 class WebhookSubscriptionSerializer(serializers.ModelSerializer):
@@ -196,6 +265,8 @@ class WebhookSubscriptionSerializer(serializers.ModelSerializer):
             "event_type",
             "target_url",
             "is_active",
+            "signature_algorithm",
+            "filter_condition",
             "created_at",
             "last_triggered",
             "failure_count",
@@ -204,6 +275,44 @@ class WebhookSubscriptionSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "secret": {"write_only": True},
         }
+
+    def validate_filter_condition(self, value):
+        if value in (None, {}):
+            return value
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("filter_condition must be an object.")
+
+        allowed_ops = {"and", "or", "not", "eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "startswith", "regex"}
+
+        def _validate(node: dict):
+            if not isinstance(node, dict):
+                raise serializers.ValidationError("Each condition node must be an object.")
+            op = str(node.get("op", "")).lower()
+            if op not in allowed_ops:
+                raise serializers.ValidationError(f"Unsupported operator: {op}")
+
+            if op in {"and", "or"}:
+                conditions = node.get("conditions")
+                if not isinstance(conditions, list) or not conditions:
+                    raise serializers.ValidationError(f"'{op}' requires a non-empty conditions array.")
+                for sub in conditions:
+                    _validate(sub)
+                return
+
+            if op == "not":
+                condition = node.get("condition")
+                if not isinstance(condition, dict):
+                    raise serializers.ValidationError("'not' requires a condition object.")
+                _validate(condition)
+                return
+
+            if "field" not in node:
+                raise serializers.ValidationError(f"'{op}' requires a field.")
+            if "value" not in node:
+                raise serializers.ValidationError(f"'{op}' requires a value.")
+
+        _validate(value)
+        return value
 
 
 class RecordEventRequestSerializer(serializers.Serializer):
@@ -238,6 +347,7 @@ class APIKeySerializer(serializers.ModelSerializer):
             "id",
             "name",
             "key",
+            "team",
             "tier",
             "quota_per_hour",
             "is_active",

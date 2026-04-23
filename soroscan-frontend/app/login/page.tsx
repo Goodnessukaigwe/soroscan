@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { Suspense, useState } from 'react';
 import { useMutation, gql } from '@apollo/client';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
@@ -32,9 +32,9 @@ const loginSchema = z.object({
 type LoginFormValues = z.infer<typeof loginSchema>;
 
 /**
- * LoginPage provides a terminal-styled interface for user authentication.
+ * Inner login form — uses useSearchParams and must render inside Suspense (Next.js static generation).
  */
-export default function LoginPage() {
+function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
@@ -45,7 +45,7 @@ export default function LoginPage() {
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<LoginFormValues>({
-    resolver: zodResolver(loginSchema as unknown as Parameters<typeof zodResolver>[0]),
+    resolver: zodResolver(loginSchema),
   });
 
   const [login] = useMutation(LOGIN_MUTATION);
@@ -156,5 +156,24 @@ export default function LoginPage() {
         All activity is logged and monitored.
       </p>
     </div>
+  );
+}
+
+/**
+ * LoginPage provides a terminal-styled interface for user authentication.
+ */
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-terminal-black flex flex-col items-center justify-center p-6 font-terminal-mono">
+          <p className="text-[10px] text-terminal-green uppercase tracking-widest">
+            LOADING_SESSION...
+          </p>
+        </div>
+      }
+    >
+      <LoginPageInner />
+    </Suspense>
   );
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import "./styles/landing.css"
+import "../styles/landing.css"
 import { Navbar } from "@/components/terminal/landing/Navbar"
 import { Hero } from "@/components/terminal/landing/Hero"
 import { Features } from "@/components/terminal/landing/Features"

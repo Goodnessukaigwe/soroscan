@@ -5,6 +5,7 @@ from factory.django import DjangoModelFactory
 from soroscan.ingest.models import (
     ContractABI,
     ContractEvent,
+    ContractMetadata,
     EventSchema,
     RemediationIncident,
     RemediationRule,
@@ -28,13 +29,16 @@ class TrackedContractFactory(DjangoModelFactory):
     class Meta:
         model = TrackedContract
 
-    contract_id = factory.Sequence(lambda n: f"C{str(n).zfill(55)}{'A' * (55 - len(str(n)))}")
+    # Keep factory data aligned with the model's 56-character contract_id limit.
+    contract_id = factory.Sequence(lambda n: f"C{str(n).zfill(55)}")
     name = factory.Sequence(lambda n: f"Contract {n}")
     description = "Test contract"
     owner = factory.SubFactory(UserFactory)
     is_active = True
     deprecation_status = TrackedContract.DeprecationStatus.ACTIVE
     deprecation_reason = ""
+    event_filter_type = TrackedContract.FILTER_NONE
+    event_filter_list = factory.LazyFunction(list)
 
 
 class EventSchemaFactory(DjangoModelFactory):
@@ -134,3 +138,16 @@ class RemediationIncidentFactory(DjangoModelFactory):
     contract = factory.SubFactory(TrackedContractFactory)
     status = RemediationIncident.STATUS_ALERTED
     anomaly_snapshot = {"type": "no_events_for_minutes", "minutes": 60}
+
+
+class ContractMetadataFactory(DjangoModelFactory):
+    class Meta:
+        model = ContractMetadata
+
+    contract = factory.SubFactory(TrackedContractFactory)
+    name = factory.Sequence(lambda n: f"Contract Metadata {n}")
+    description = factory.Faker("paragraph")
+    tags = factory.LazyFunction(list)
+    documentation_url = ""
+    github_repo = ""
+    team_email = ""

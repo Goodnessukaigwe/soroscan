@@ -1,0 +1,57 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.4, pytest-8.4.2, pluggy-1.6.0 -- C:\Users\tomio\Desktop\soroscan\django-backend\venv\Scripts\python.exe
+cachedir: .pytest_cache
+django: version: 5.2.10, settings: soroscan.settings_test (from ini)
+rootdir: C:\Users\tomio\Desktop\soroscan\django-backend
+configfile: pytest.ini
+plugins: Faker-40.4.0, asyncio-0.25.2, cov-7.0.0, django-4.11.1, mock-3.15.1
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None
+collecting ... collected 3 items
+
+soroscan/ingest/tests/test_last_updated.py::TestLastEventAtTracking::test_last_event_at_updates_on_new_event FAILED [ 33%]
+soroscan/ingest/tests/test_last_updated.py::TestLastEventAtTracking::test_last_event_at_only_updates_if_newer PASSED [ 66%]
+soroscan/ingest/tests/test_last_updated.py::TestLastEventAtTracking::test_last_event_at_handles_none PASSED [100%]
+
+================================== FAILURES ===================================
+_______ TestLastEventAtTracking.test_last_event_at_updates_on_new_event _______
+
+self = <soroscan.ingest.tests.test_last_updated.TestLastEventAtTracking object at 0x0000022229C54390>
+
+    def test_last_event_at_updates_on_new_event(self):
+        contract = TrackedContractFactory()
+        assert contract.last_event_at is None
+    
+        now = timezone.now()
+        event_data = {
+            "ledger": 1000,
+            "event_index": 0,
+            "tx_hash": "hash1",
+            "event_type": "swap",
+            "payload": {"amount": 100},
+            "timestamp": now,
+            "raw_xdr": "xdr1",
+        }
+    
+        # Mocking the event object for the helper function
+        class MockEvent:
+            def __init__(self, data):
+                self.data = data
+            def __getitem__(self, key):
+                return self.data.get(key)
+            def get(self, key, default=None):
+                return self.data.get(key, default)
+    
+        _upsert_contract_event(contract, MockEvent(event_data))
+    
+        contract.refresh_from_db()
+        # Compare timestamps with a small tolerance if needed, but here they should be identical
+>       assert contract.last_event_at == now
+E       assert datetime.datetime(2026, 3, 27, 11, 3, 12, 748352, tzinfo=datetime.timezone.utc) == datetime.datetime(2026, 3, 27, 11, 3, 12, 745943, tzinfo=datetime.timezone.utc)
+E        +  where datetime.datetime(2026, 3, 27, 11, 3, 12, 748352, tzinfo=datetime.timezone.utc) = <TrackedContract: Contract 0 (C0000000...)>.last_event_at
+
+soroscan\ingest\tests\test_last_updated.py:38: AssertionError
+---------------------------- Captured stderr setup ----------------------------
+Creating test database for alias 'default'...
+=========================== short test summary info ===========================
+FAILED soroscan/ingest/tests/test_last_updated.py::TestLastEventAtTracking::test_last_event_at_updates_on_new_event
+========================= 1 failed, 2 passed in 4.34s =========================

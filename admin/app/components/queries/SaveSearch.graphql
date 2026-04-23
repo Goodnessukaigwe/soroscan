@@ -1,0 +1,41 @@
+mutation SaveSearch($name: String!, $criteria: JSON!) {
+  saveSearch(name: $name, criteria: $criteria) {
+    id
+    name
+    criteria
+    createdAt
+  }
+}
+
+query GetSavedSearches {
+  savedSearches {
+    id
+    name
+    criteria
+    createdAt
+  }
+}
+
+mutation DeleteSavedSearch($id: ID!) {
+  deleteSavedSearch(id: $id) {
+    success
+  }
+}
+
+query GetSearchHistory($limit: Int = 20) {
+  searchHistory(limit: $limit) {
+    id
+    criteria
+    timestamp
+    resultCount
+  }
+}
+
+mutation AddSearchToHistory($criteria: JSON!, $resultCount: Int) {
+  addSearchToHistory(criteria: $criteria, resultCount: $resultCount) {
+    id
+    criteria
+    timestamp
+    resultCount
+  }
+}

@@ -227,6 +227,9 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ROUTES = {
+    "ingest.tasks.ingest_latest_events": {"queue": "high_priority"},
+    "ingest.tasks.dispatch_webhook": {"queue": "default"},
+    "ingest.tasks.aggregate_event_statistics": {"queue": "low_priority"},
     "soroscan.ingest.tasks.backfill_contract_events": {"queue": "backfill"},
     "soroscan.ingest.tasks.evaluate_remediation_rules": {"queue": "default"},
 }
@@ -252,6 +255,14 @@ CELERY_BEAT_SCHEDULE = {
     "evaluate-remediation-rules": {
         "task": "soroscan.ingest.tasks.evaluate_remediation_rules",
         "schedule": 300,  # every 5 minutes
+    },
+    "aggregate-event-statistics": {
+        "task": "ingest.tasks.aggregate_event_statistics",
+        "schedule": 3600,  # hourly
+    },
+    "recompute-call-graph": {
+        "task": "ingest.tasks.recompute_call_graph",
+        "schedule": 3600,  # hourly
     },
 }
 
@@ -353,6 +364,26 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@soroscan.io")
 
 # Alert settings
 SLACK_ALERT_TIMEOUT_SECONDS = env.int("SLACK_ALERT_TIMEOUT_SECONDS", default=10)
+
+# ---------------------------------------------------------------------------
+# Event Streaming Configuration (Issue: Downstream Integration)
+# ---------------------------------------------------------------------------
+EVENT_STREAMING = {
+    "enabled": env.bool("EVENT_STREAMING_ENABLED", default=False),
+    "backend": env("EVENT_STREAMING_BACKEND", default="kafka"),  # 'kafka', 'pubsub', or 'sqs'
+    "kafka": {
+        "bootstrap_servers": env.list("KAFKA_BOOTSTRAP_SERVERS", default=["localhost:9092"]),
+        "topic": env("KAFKA_TOPIC", default="soroscan.events"),
+        "schema_registry_url": env("KAFKA_SCHEMA_REGISTRY_URL", default=""),
+    },
+    "pubsub": {
+        "project_id": env("PUBSUB_PROJECT_ID", default=""),
+        "topic": env("PUBSUB_TOPIC", default="soroscan.events"),
+    },
+    "sqs": {
+        "queue_url": env("SQS_QUEUE_URL", default=""),
+    },
+}
 
 # ---------------------------------------------------------------------------
 # S3 / Archive storage configuration
