@@ -670,6 +670,25 @@ class WebhookSubscription(models.Model):
     def __str__(self):
         return f"Webhook -> {self.target_url} ({self.contract.name})"
 
+    def get_known_event_types(self):
+        types = set()
+        if hasattr(self.contract, "event_schemas"):
+            types.update(self.contract.event_schemas.values_list("event_type", flat=True))
+        if hasattr(self.contract, "abi") and self.contract.abi.abi_json:
+            for ev in self.contract.abi.abi_json:
+                if isinstance(ev, dict) and ev.get("name"):
+                    types.add(ev["name"])
+        types.update(self.contract.events.values_list("event_type", flat=True).distinct())
+        return types
+
+    def clean(self):
+        super().clean()
+        if self.event_type and self.contract_id:
+            known = self.get_known_event_types()
+            if known and self.event_type not in known:
+                from django.core.exceptions import ValidationError
+                raise ValidationError({"event_type": f"Invalid event type. Available types: {', '.join(sorted(known))}"})
+
     def save(self, *args, **kwargs):
         # Auto-generate secret if not set
         if not self.secret:

@@ -490,6 +490,44 @@ class WebhookSubscriptionAdmin(AdminAuditMixin, admin.ModelAdmin):
     )
     ordering = ["-created_at"]
 
+    class Media:
+        js = ("ingest/admin_event_type_autocomplete.js",)
+
+    def get_urls(self):
+        from django.urls import path
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                "event-types/",
+                self.admin_site.admin_view(self.event_types_api),
+                name="webhooksubscription_event_types",
+            ),
+        ]
+        return custom_urls + urls
+
+    def event_types_api(self, request):
+        from django.http import JsonResponse
+        from soroscan.ingest.models import TrackedContract
+        contract_id = request.GET.get("contract_id")
+        if not contract_id:
+            return JsonResponse({"results": []})
+        try:
+            contract = TrackedContract.objects.get(pk=contract_id)
+        except TrackedContract.DoesNotExist:
+            return JsonResponse({"results": []})
+        
+        types = set()
+        if hasattr(contract, "event_schemas"):
+            types.update(contract.event_schemas.values_list("event_type", flat=True))
+        if hasattr(contract, "abi") and contract.abi.abi_json:
+            for ev in contract.abi.abi_json:
+                if isinstance(ev, dict) and ev.get("name"):
+                    types.add(ev["name"])
+        types.update(contract.events.values_list("event_type", flat=True).distinct())
+        
+        results = [{"id": t, "text": t} for t in sorted(types)]
+        return JsonResponse({"results": results})
+
     def get_queryset(self, request):
         """Optimize queries with select_related to prevent N+1 issues."""
         queryset = super().get_queryset(request)
