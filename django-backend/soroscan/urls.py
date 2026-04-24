@@ -15,6 +15,7 @@ from rest_framework_simplejwt.views import (
 )
 
 from soroscan.graphql_views import ThrottledGraphQLView
+from soroscan.health import health_view, readiness_view
 from soroscan.ingest.views import audit_trail_view, contract_status, rate_limit_analytics_view
 from soroscan.ingest.schema import schema
 
@@ -22,6 +23,9 @@ urlpatterns = [
     # Prometheus metrics — must be unauthenticated; placed before any auth middleware
     # that would intercept requests.  django_prometheus.urls exposes GET /metrics.
     path("", include("django_prometheus.urls")),
+
+    path("health/", health_view, name="health"),
+    path("ready/", readiness_view, name="readiness"),
 
     path("admin/", admin.site.urls),
     path("api/audit-trail/", audit_trail_view, name="audit-trail"),
