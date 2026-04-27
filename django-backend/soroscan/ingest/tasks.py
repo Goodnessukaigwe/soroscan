@@ -24,7 +24,7 @@ from celery import shared_task
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
-from celery.signals import task_postrun, task_prerun
+from celery.signals import task_postrun, task_prerun, task_retry
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Count, F, Max, Min
@@ -144,6 +144,42 @@ def _stop_timeout_monitor(task_id: str, task, **kwargs) -> None:
         timer.cancel()
 
 
+@task_retry.connect
+def _log_task_retry_signal(sender, task_id, args, kwargs, einfo, **extra) -> None:
+    """
+    Log all Celery task retries with attempt number and next retry time.
+    This signal fires for both manual self.retry() calls and autoretry_for.
+    """
+    task_name = sender.name if sender else "unknown"
+    request = sender.request if sender else None
+    attempt_number = request.retries + 1 if request else 1
+    
+    # Extract exception type from einfo
+    exception_type = einfo.type.__name__ if einfo and einfo.type else "Unknown"
+    
+    # Try to get countdown from request
+    countdown = getattr(request, "countdown", None) if request else None
+    next_retry_time = None
+    if countdown is not None:
+        next_retry_time = timezone.now() + timedelta(seconds=countdown)
+    
+    logger.info(
+        "Task %s retry scheduled (attempt %d) due to %s. Next retry: %s",
+        task_name,
+        attempt_number + 1,  # Next attempt number
+        exception_type,
+        next_retry_time.isoformat() if next_retry_time else "calculated with backoff",
+        extra={
+            "task_name": task_name,
+            "task_id": task_id,
+            "attempt_number": attempt_number + 1,
+            "exception_type": exception_type,
+            "next_retry_time": next_retry_time.isoformat() if next_retry_time else None,
+            "countdown_seconds": countdown,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Backoff calculation for webhook retries
 # ---------------------------------------------------------------------------
@@ -177,6 +213,41 @@ def calculate_backoff(attempt: int, strategy: str, base_seconds: int) -> int:
     else:
         # Default to exponential if unknown strategy
         return base_seconds * (2**attempt)
+
+
+def _log_task_retry(
+    task_name: str,
+    attempt_number: int,
+    exception_type: str,
+    countdown: int | None = None,
+) -> None:
+    """
+    Log Celery task retry with attempt number and next retry time.
+    
+    Args:
+        task_name: Name of the task being retried
+        attempt_number: Current attempt number (1-based)
+        exception_type: Type of exception that triggered the retry
+        countdown: Seconds until next retry (None if using exponential backoff with jitter)
+    """
+    next_retry_time = None
+    if countdown is not None:
+        next_retry_time = timezone.now() + timedelta(seconds=countdown)
+    
+    logger.info(
+        "Task %s retry scheduled (attempt %d) due to %s. Next retry: %s",
+        task_name,
+        attempt_number,
+        exception_type,
+        next_retry_time.isoformat() if next_retry_time else "calculated with jitter",
+        extra={
+            "task_name": task_name,
+            "attempt_number": attempt_number,
+            "exception_type": exception_type,
+            "next_retry_time": next_retry_time.isoformat() if next_retry_time else None,
+            "countdown_seconds": countdown,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -818,6 +889,12 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
             # If no Retry-After header, use webhook's backoff strategy
             if countdown is None:
                 if webhook.retry_backoff_strategy == WebhookSubscription.BACKOFF_EXPONENTIAL:
+                    _log_task_retry(
+                        "dispatch_webhook",
+                        attempt_number + 1,
+                        "RateLimitError",
+                        countdown=None,
+                    )
                     raise self.retry(
                         exc=requests.HTTPError("Rate limited (429)", response=response),
                         retry_backoff=webhook.retry_backoff_seconds,
@@ -829,6 +906,12 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
                     webhook.retry_backoff_seconds,
                 )
 
+            _log_task_retry(
+                "dispatch_webhook",
+                attempt_number + 1,
+                "RateLimitError",
+                countdown=countdown,
+            )
             raise self.retry(
                 exc=requests.HTTPError("Rate limited (429)", response=response),
                 countdown=countdown,
@@ -956,12 +1039,24 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
 
         # Retry with backoff based on webhook's strategy
         if webhook.retry_backoff_strategy == WebhookSubscription.BACKOFF_EXPONENTIAL:
+            _log_task_retry(
+                "dispatch_webhook",
+                attempt_number + 1,
+                "TimeoutError",
+                countdown=None,
+            )
             raise self.retry(retry_backoff=webhook.retry_backoff_seconds, retry_jitter=True)
 
         countdown = calculate_backoff(
             self.request.retries,
             webhook.retry_backoff_strategy,
             webhook.retry_backoff_seconds,
+        )
+        _log_task_retry(
+            "dispatch_webhook",
+            attempt_number + 1,
+            "TimeoutError",
+            countdown=countdown,
         )
         raise self.retry(countdown=countdown)
 
@@ -1011,12 +1106,24 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
 
         # Retry with backoff based on webhook's strategy
         if webhook.retry_backoff_strategy == WebhookSubscription.BACKOFF_EXPONENTIAL:
+            _log_task_retry(
+                "dispatch_webhook",
+                attempt_number + 1,
+                type(exc).__name__,
+                countdown=None,
+            )
             raise self.retry(exc=exc, retry_backoff=webhook.retry_backoff_seconds, retry_jitter=True)
 
         countdown = calculate_backoff(
             self.request.retries,
             webhook.retry_backoff_strategy,
             webhook.retry_backoff_seconds,
+        )
+        _log_task_retry(
+            "dispatch_webhook",
+            attempt_number + 1,
+            type(exc).__name__,
+            countdown=countdown,
         )
         raise self.retry(exc=exc, countdown=countdown)
 
@@ -2022,9 +2129,15 @@ def ingest_latest_events() -> int:
 
     finally:
         # Always record duration, even if an exception occurred.
+        elapsed = time.monotonic() - _start
         m.task_duration_seconds.labels(task_name="ingest_latest_events").observe(
-            time.monotonic() - _start
+            elapsed
         )
+        
+        # Update event ingestion rate gauge (events/sec)
+        if elapsed > 0:
+            rate = new_events / elapsed
+            m.event_ingestion_rate_gauge.set(rate)
 
     return new_events
 
@@ -2216,6 +2329,17 @@ def backfill_contract_events(
             task_name="backfill_contract_events",
             error_type=type(exc).__name__,
         ).inc()
+        
+        # Log retry information
+        attempt_number = self.request.retries + 1
+        if self.request.retries < self.max_retries:
+            _log_task_retry(
+                "backfill_contract_events",
+                attempt_number + 1,
+                type(exc).__name__,
+                countdown=60,  # default_retry_delay from task decorator
+            )
+        
         raise self.retry(exc=exc)
     finally:
         # Always record duration, even if an exception occurred.

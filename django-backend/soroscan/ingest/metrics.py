@@ -37,6 +37,7 @@ __all__ = [
     "event_streaming_total",
     "ledger_gaps_total",
     "missing_events_total",
+    "event_ingestion_rate_gauge",
 ]
 
 
@@ -263,4 +264,10 @@ missing_events_total = _get_or_create(
     "soroscan_missing_events_total",
     "Total number of missing ledgers/events detected by reconciliation",
     ["contract_id"],
+)
+
+event_ingestion_rate_gauge = _get_or_create(
+    Gauge,
+    "soroscan_event_ingestion_rate",
+    "Current event ingestion rate in events per second",
 )
