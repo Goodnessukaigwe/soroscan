@@ -4,6 +4,7 @@ Celery tasks for SoroScan background processing.
 
 import threading
 import cProfile
+import calendar
 import base64
 import hashlib
 import hmac
@@ -13,7 +14,8 @@ import logging
 import pstats
 import re
 import time
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import date, datetime, timedelta, timezone as dt_timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 import jsonschema
@@ -24,6 +26,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from celery.signals import task_postrun, task_prerun
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import Count, F, Max, Min
 from django.utils import timezone
 
@@ -48,6 +51,11 @@ from .models import (
     ContractInvocation,
     ContractDependency,
     CallGraph,
+    DependencyImpactAssessment,
+    Organization,
+    OrganizationBudget,
+    OrganizationCostSnapshot,
+    WebhookDeadLetter,
 )
 from .rate_limit import check_ingest_rate
 from .stellar_client import SorobanClient
@@ -766,6 +774,8 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
             timeout=webhook.timeout_seconds,
         )
         status_code = response.status_code
+        elapsed_s = time.monotonic() - _start
+        latency_ms = int(elapsed_s * 1000)
 
         if status_code == 429:
             error_msg = "Rate limited by subscriber (429)"
@@ -777,9 +787,19 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
                 False,
                 error_msg,
                 payload_size,
+                acknowledged=False,
+                latency_ms=latency_ms,
+                within_sla=False,
             )
             attempt_logged = True
-            _on_delivery_failure(webhook, self)
+            _on_delivery_failure(
+                webhook,
+                self,
+                event,
+                event_data,
+                status_code=status_code,
+                error=error_msg,
+            )
             m.webhook_deliveries_total.labels(status="rate_limited").inc()
 
             countdown: int | None = None
@@ -814,8 +834,29 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
                 countdown=countdown,
             )
 
-        success = 200 <= status_code < 300
-        error_msg = "" if success else f"HTTP {status_code}"
+        acknowledged, ack_status = _validate_webhook_ack(response, webhook)
+        m.webhook_ack_total.labels(status=ack_status).inc()
+
+        within_sla = bool(
+            200 <= status_code < 300
+            and acknowledged
+            and elapsed_s <= webhook.delivery_sla_seconds
+        )
+        if 200 <= status_code < 300 and acknowledged:
+            m.webhook_sla_total.labels(
+                outcome="within_sla" if within_sla else "breached"
+            ).inc()
+
+        success = 200 <= status_code < 300 and acknowledged
+        if success:
+            error_msg = ""
+        elif 200 <= status_code < 300:
+            error_msg = (
+                f"Missing or invalid acknowledgement header "
+                f"'{webhook.ack_header_name}: {webhook.ack_header_value}'"
+            )
+        else:
+            error_msg = f"HTTP {status_code}"
 
         _log_delivery_attempt(
             webhook,
@@ -825,6 +866,9 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
             success,
             error_msg,
             payload_size,
+            acknowledged=acknowledged,
+            latency_ms=latency_ms,
+            within_sla=within_sla,
         )
         attempt_logged = True
 
@@ -840,17 +884,38 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
                 extra={"webhook_id": subscription_id},
             )
             m.webhook_deliveries_total.labels(status="success").inc()
-            m.webhook_delivery_duration_seconds.observe(time.monotonic() - _start)
+            m.webhook_delivery_duration_seconds.observe(elapsed_s)
             m.task_duration_seconds.labels(task_name="dispatch_webhook").observe(
-                time.monotonic() - _start
+                elapsed_s
             )
             return True
 
-        _on_delivery_failure(webhook, self)
+        _on_delivery_failure(
+            webhook,
+            self,
+            event,
+            event_data,
+            status_code=status_code,
+            error=error_msg,
+        )
         m.webhook_deliveries_total.labels(status="failure").inc()
+
+        if 200 <= status_code < 300 and not acknowledged:
+            nack_exc = requests.HTTPError(error_msg, response=response)
+            if self.request.retries >= self.max_retries:
+                raise nack_exc
+            countdown = calculate_backoff(
+                self.request.retries,
+                webhook.retry_backoff_strategy,
+                webhook.retry_backoff_seconds,
+            )
+            raise self.retry(exc=nack_exc, countdown=countdown)
+
         response.raise_for_status()
 
     except requests.exceptions.Timeout:
+        elapsed_s = time.monotonic() - _start
+        latency_ms = int(elapsed_s * 1000)
         # Log timeout as 504 Gateway Timeout
         if not attempt_logged:
             _log_delivery_attempt(
@@ -861,9 +926,19 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
                 False,
                 "Timeout exceeded",
                 payload_size,
+                acknowledged=False,
+                latency_ms=latency_ms,
+                within_sla=False,
             )
             attempt_logged = True
-            _on_delivery_failure(webhook, self)
+            _on_delivery_failure(
+                webhook,
+                self,
+                event,
+                event_data,
+                status_code=504,
+                error="Timeout exceeded",
+            )
 
         logger.warning(
             "Webhook %s dispatch timed out (attempt %s/%s) after %d seconds",
@@ -891,15 +966,33 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
         raise self.retry(countdown=countdown)
 
     except requests.RequestException as exc:
+        elapsed_s = time.monotonic() - _start
+        latency_ms = int(elapsed_s * 1000)
         if not attempt_logged:
             _log_delivery_attempt(
-                webhook, event, attempt_number, None, False, str(exc), payload_size
+                webhook,
+                event,
+                attempt_number,
+                None,
+                False,
+                str(exc),
+                payload_size,
+                acknowledged=False,
+                latency_ms=latency_ms,
+                within_sla=False,
             )
-            _on_delivery_failure(webhook, self)
+            _on_delivery_failure(
+                webhook,
+                self,
+                event,
+                event_data,
+                status_code=None,
+                error=str(exc),
+            )
         m.webhook_deliveries_total.labels(status="failure").inc()
-        m.webhook_delivery_duration_seconds.observe(time.monotonic() - _start)
+        m.webhook_delivery_duration_seconds.observe(elapsed_s)
         m.task_duration_seconds.labels(task_name="dispatch_webhook").observe(
-            time.monotonic() - _start
+            elapsed_s
         )
 
         logger.warning(
@@ -947,6 +1040,9 @@ def _log_delivery_attempt(
     success: bool,
     error: str,
     payload_bytes: int | None = None,
+    acknowledged: bool = False,
+    latency_ms: int | None = None,
+    within_sla: bool = False,
 ) -> None:
     """Create a ``WebhookDeliveryLog`` record for one dispatch attempt."""
     from .models import WebhookDeliveryLog
@@ -959,12 +1055,202 @@ def _log_delivery_attempt(
         success=success,
         error=error,
         payload_bytes=payload_bytes,
+        acknowledged=acknowledged,
+        latency_ms=latency_ms,
+        within_sla=within_sla,
+    )
+
+
+def _validate_webhook_ack(
+    response: requests.Response,
+    webhook: WebhookSubscription,
+) -> tuple[bool, str]:
+    """
+    Return (acknowledged, status) based on configured acknowledgement header.
+
+    Status values: valid | missing | invalid
+    """
+    header_name = (webhook.ack_header_name or "X-SoroScan-Ack").strip()
+    expected_value = (webhook.ack_header_value or "ok").strip()
+    received = response.headers.get(header_name)
+    if received is None:
+        return (False, "missing")
+    if received.strip().lower() != expected_value.lower():
+        return (False, "invalid")
+    return (True, "valid")
+
+
+def _default_webhook_escalation_policy() -> list[dict[str, Any]]:
+    return [
+        {
+            "channel": "slack",
+            "target": getattr(settings, "WEBHOOK_ESCALATION_SLACK_TARGET", ""),
+            "after_failures": 2,
+        },
+        {
+            "channel": "sms",
+            "target": getattr(settings, "WEBHOOK_ESCALATION_SMS_TARGET", ""),
+            "after_failures": 4,
+        },
+        {
+            "channel": "pagerduty",
+            "target": getattr(settings, "WEBHOOK_ESCALATION_PAGERDUTY_TARGET", ""),
+            "after_failures": 6,
+        },
+    ]
+
+
+def _normalized_webhook_escalation_policy(
+    webhook: WebhookSubscription,
+) -> list[dict[str, Any]]:
+    raw = webhook.escalation_policy if isinstance(webhook.escalation_policy, list) else []
+    policy: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        channel = str(entry.get("channel", "")).strip().lower()
+        target = str(entry.get("target", "")).strip()
+        if channel not in {"slack", "sms", "pagerduty"}:
+            continue
+        try:
+            after_failures = int(entry.get("after_failures", 1))
+        except (TypeError, ValueError):
+            continue
+        if after_failures < 1:
+            continue
+        policy.append(
+            {
+                "channel": channel,
+                "target": target,
+                "after_failures": after_failures,
+            }
+        )
+
+    if not policy:
+        policy = _default_webhook_escalation_policy()
+
+    return sorted(policy, key=lambda item: item["after_failures"])
+
+
+def _escalation_dedup_key(
+    webhook_id: int,
+    event_id: int | None,
+    channel: str,
+    threshold: int,
+) -> str:
+    return (
+        f"soroscan:webhook_escalation:{webhook_id}:{event_id or 'none'}:"
+        f"{channel}:{threshold}"
+    )
+
+
+def _send_escalation_message(
+    channel: str,
+    target: str,
+    message: str,
+    payload: dict[str, Any],
+) -> None:
+    timeout = getattr(settings, "WEBHOOK_ESCALATION_TIMEOUT_SECONDS", 10)
+    if channel == "slack":
+        resp = requests.post(target, json={"text": message, "payload": payload}, timeout=timeout)
+    elif channel == "sms":
+        resp = requests.post(target, json={"message": message, "payload": payload}, timeout=timeout)
+    elif channel == "pagerduty":
+        resp = requests.post(target, json={"summary": message, "payload": payload}, timeout=timeout)
+    else:
+        raise ValueError(f"Unsupported escalation channel: {channel}")
+    resp.raise_for_status()
+
+
+def _maybe_escalate_webhook_failure(
+    webhook: WebhookSubscription,
+    event: ContractEvent,
+    failure_count: int,
+    status_code: int | None,
+    error: str,
+) -> None:
+    from django.core.cache import cache
+
+    policy = _normalized_webhook_escalation_policy(webhook)
+    dedup_ttl = int(getattr(settings, "WEBHOOK_ESCALATION_DEDUP_SECONDS", 300))
+    m = _get_metrics()
+
+    for entry in policy:
+        threshold = entry["after_failures"]
+        if failure_count != threshold:
+            continue
+
+        channel = entry["channel"]
+        target = entry["target"]
+        if not target:
+            logger.warning(
+                "Escalation channel %s configured without target for webhook %s",
+                channel,
+                webhook.id,
+                extra={"webhook_id": webhook.id},
+            )
+            continue
+
+        dedup_key = _escalation_dedup_key(
+            webhook.id,
+            event.id if event else None,
+            channel,
+            threshold,
+        )
+        if not cache.add(dedup_key, "1", timeout=dedup_ttl):
+            continue
+
+        message = (
+            f"Webhook delivery escalation ({channel.upper()}) for subscription {webhook.id} "
+            f"after {failure_count} consecutive failures."
+        )
+        payload = {
+            "webhook_id": webhook.id,
+            "target_url": webhook.target_url,
+            "contract_id": webhook.contract.contract_id,
+            "event_id": event.id if event else None,
+            "event_type": event.event_type if event else None,
+            "failure_count": failure_count,
+            "status_code": status_code,
+            "error": error[:500],
+        }
+        try:
+            _send_escalation_message(channel, target, message, payload)
+            m.webhook_escalations_total.labels(channel=channel, status="sent").inc()
+        except Exception:
+            m.webhook_escalations_total.labels(channel=channel, status="failed").inc()
+            logger.exception(
+                "Failed to send webhook escalation via %s for webhook %s",
+                channel,
+                webhook.id,
+            )
+
+
+def _enqueue_webhook_dead_letter(
+    webhook: WebhookSubscription,
+    event: ContractEvent,
+    payload: dict[str, Any],
+    status_code: int | None,
+    error: str,
+    retries_exhausted: int,
+) -> None:
+    WebhookDeadLetter.objects.create(
+        subscription=webhook,
+        event=event,
+        payload=payload,
+        status_code=status_code,
+        error=error[:2000],
+        retries_exhausted=retries_exhausted,
     )
 
 
 def _on_delivery_failure(
     webhook: WebhookSubscription,
     task_instance,
+    event: ContractEvent,
+    payload: dict[str, Any],
+    status_code: int | None,
+    error: str,
 ) -> None:
     """
     Atomically increment ``failure_count`` and, when all retries are exhausted,
@@ -973,12 +1259,29 @@ def _on_delivery_failure(
     WebhookSubscription.objects.filter(pk=webhook.pk).update(
         failure_count=F("failure_count") + 1,
     )
+    webhook.refresh_from_db(fields=["failure_count", "status", "is_active", "escalation_policy"])
+
+    _maybe_escalate_webhook_failure(
+        webhook=webhook,
+        event=event,
+        failure_count=webhook.failure_count,
+        status_code=status_code,
+        error=error,
+    )
 
     is_last_attempt = task_instance.request.retries >= task_instance.max_retries
     if is_last_attempt:
         WebhookSubscription.objects.filter(pk=webhook.pk).update(
             status=WebhookSubscription.STATUS_SUSPENDED,
             is_active=False,
+        )
+        _enqueue_webhook_dead_letter(
+            webhook=webhook,
+            event=event,
+            payload=payload,
+            status_code=status_code,
+            error=error,
+            retries_exhausted=task_instance.max_retries + 1,
         )
         logger.error(
             "Webhook subscription %s suspended after %d consecutive failures",
@@ -1295,6 +1598,16 @@ def recompute_call_graph(contract_id: str | None = None) -> bool:
                 has_cycles = True
 
     # Prepare graph data for JSON storage
+    max_call_count = max((d.call_count for d in deps), default=1)
+    cycle_nodes = set(cycles)
+
+    # Update edge-level dependency risk score.
+    for dep in deps:
+        normalized_weight = dep.call_count / max_call_count
+        cycle_bonus = 0.25 if dep.caller.contract_id in cycle_nodes else 0.0
+        dep.risk_score = round(min(1.0, normalized_weight + cycle_bonus) * 100.0, 2)
+        dep.save(update_fields=["risk_score", "last_call"])
+
     graph_data = {
         "nodes": [{"id": n, "label": n[:8]} for n in nodes],
         "edges": [
@@ -1302,6 +1615,7 @@ def recompute_call_graph(contract_id: str | None = None) -> bool:
                 "from": d.caller.contract_id,
                 "to": d.callee.contract_id,
                 "weight": d.call_count,
+                "risk_score": d.risk_score,
             }
             for d in deps
         ],
@@ -1329,6 +1643,133 @@ def recompute_call_graph(contract_id: str | None = None) -> bool:
     )
 
     return True
+
+
+def _impact_level_for_score(score: float) -> str:
+    if score >= 80:
+        return DependencyImpactAssessment.IMPACT_CRITICAL
+    if score >= 50:
+        return DependencyImpactAssessment.IMPACT_HIGH
+    if score >= 20:
+        return DependencyImpactAssessment.IMPACT_MEDIUM
+    return DependencyImpactAssessment.IMPACT_LOW
+
+
+@shared_task(name="ingest.tasks.assess_vulnerability_impact")
+def assess_vulnerability_impact(contract_id: str) -> dict[str, Any]:
+    """
+    Assess blast radius for a potentially exploited contract.
+
+    Returns downstream impacted contracts, cycle participation, and risk score.
+    """
+    try:
+        root_contract = TrackedContract.objects.get(contract_id=contract_id)
+    except TrackedContract.DoesNotExist:
+        return {
+            "contract_id": contract_id,
+            "affected_contracts": [],
+            "impacted_count": 0,
+            "risk_score": 0.0,
+            "impact_level": DependencyImpactAssessment.IMPACT_LOW,
+            "has_cycles": False,
+        }
+
+    deps = ContractDependency.objects.select_related("caller", "callee").all()
+    adj: dict[str, list[ContractDependency]] = {}
+    for dep in deps:
+        adj.setdefault(dep.caller.contract_id, []).append(dep)
+
+    visited: set[str] = set()
+    queue: list[str] = [contract_id]
+    downstream: list[str] = []
+    cumulative_weight = 0
+    has_cycle = False
+
+    while queue:
+        node = queue.pop(0)
+        for dep in adj.get(node, []):
+            target = dep.callee.contract_id
+            cumulative_weight += max(dep.call_count, 1)
+            if target == contract_id:
+                has_cycle = True
+            if target in visited or target == contract_id:
+                continue
+            visited.add(target)
+            downstream.append(target)
+            queue.append(target)
+
+    impacted_count = len(downstream)
+    graph = CallGraph.objects.filter(contract=None).first()
+    if graph and graph.has_cycles:
+        cycle_details = graph.cycle_details or []
+        if isinstance(cycle_details, list) and contract_id in cycle_details:
+            has_cycle = True
+
+    # Score increases with breadth (impacted contracts), call weight, and cycles.
+    raw_score = min(100.0, impacted_count * 12.0 + cumulative_weight * 0.25 + (20.0 if has_cycle else 0.0))
+    risk_score = round(raw_score, 2)
+    impact_level = _impact_level_for_score(risk_score)
+
+    assessment_payload = {
+        "contract_id": contract_id,
+        "affected_contracts": downstream,
+        "impacted_count": impacted_count,
+        "risk_score": risk_score,
+        "impact_level": impact_level,
+        "has_cycles": has_cycle,
+    }
+
+    DependencyImpactAssessment.objects.update_or_create(
+        root_contract=root_contract,
+        defaults={
+            "affected_contracts": downstream,
+            "impacted_count": impacted_count,
+            "has_cycles": has_cycle,
+            "risk_score": risk_score,
+            "impact_level": impact_level,
+            "assessment_details": {
+                "cumulative_call_weight": cumulative_weight,
+            },
+        },
+    )
+
+    return assessment_payload
+
+
+@shared_task(name="ingest.tasks.alert_downstream_contract_change")
+def alert_downstream_contract_change(contract_id: str, change_type: str = "modified") -> int:
+    """
+    Notify dependent contract owners when an upstream dependency changes.
+    """
+    from .services.notifications import create_and_push
+
+    changed_contract = TrackedContract.objects.filter(contract_id=contract_id).first()
+    if not changed_contract:
+        return 0
+
+    dependents = ContractDependency.objects.select_related("caller", "callee", "caller__owner").filter(
+        callee=changed_contract
+    )
+
+    notified = 0
+    dedup_ttl = int(getattr(settings, "DOWNSTREAM_ALERT_DEDUP_SECONDS", 3600))
+    for dep in dependents:
+        cache_key = f"soroscan:dependency_change:{dep.caller_id}:{dep.callee_id}:{change_type}"
+        if not cache.add(cache_key, "1", timeout=dedup_ttl):
+            continue
+        create_and_push(
+            user=dep.caller.owner,
+            notification_type="alert",
+            title="Dependency Change Detected",
+            message=(
+                f"Dependency contract '{changed_contract.name}' ({changed_contract.contract_id}) "
+                f"was {change_type}. This may impact '{dep.caller.name}'."
+            ),
+            link=f"/contracts/{dep.caller.contract_id}",
+        )
+        notified += 1
+
+    return notified
 
 
 @shared_task(name="ingest.tasks.ingest_latest_events")
@@ -1932,6 +2373,7 @@ def send_alert(self, rule_id: int, event_id: int) -> str:
     (real-time via the existing Celery path). Retries with exponential backoff
     if any channel fails.
     """
+    from django.core.cache import cache
     from .models import AlertRule, AlertExecution
 
     try:
@@ -1954,6 +2396,30 @@ def send_alert(self, rule_id: int, event_id: int) -> str:
         "ledger": event.ledger,
         "timestamp": event.timestamp.isoformat(),
     }
+
+    # Deduplicate identical alerts for a short window to prevent floods.
+    dedup_window = int(getattr(settings, "ALERT_DEDUP_WINDOW_SECONDS", 300))
+    dedup_material = json.dumps(
+        {
+            "rule_id": rule.id,
+            "contract": payload["contract"],
+            "event_type": payload["event_type"],
+            "ledger": payload["ledger"],
+            "payload": payload["payload"],
+        },
+        sort_keys=True,
+    )
+    dedup_hash = hashlib.sha256(dedup_material.encode("utf-8")).hexdigest()
+    dedup_key = f"soroscan:alerts:dedup:{rule.id}:{dedup_hash}"
+    if not cache.add(dedup_key, "1", timeout=dedup_window):
+        _get_metrics().alert_deduplicated_total.labels(scope="alert_rule").inc()
+        logger.info(
+            "Deduplicated alert for rule=%s event=%s",
+            rule.id,
+            event.id,
+            extra={"rule_id": rule.id, "event_id": event.id},
+        )
+        return "skipped:deduplicated"
 
     targets = _alert_channel_targets(rule)
     if not targets:
@@ -2124,6 +2590,234 @@ def evaluate_alert_rules(event_id: int) -> int:
             )
 
     return matched
+
+
+def _month_start(value: date | None = None) -> date:
+    base = value or timezone.now().date()
+    return date(base.year, base.month, 1)
+
+
+def _month_end(value: date | None = None) -> date:
+    start = _month_start(value)
+    _, days = calendar.monthrange(start.year, start.month)
+    return date(start.year, start.month, days)
+
+
+def _decimal(value: float | int | Decimal) -> Decimal:
+    return Decimal(str(value))
+
+
+def _round_cost(value: Decimal) -> Decimal:
+    return value.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
+def _cost_pricing() -> dict[str, Decimal]:
+    return {
+        "rpc_per_call": _decimal(getattr(settings, "COST_RPC_PER_CALL_USD", "0.00001")),
+        "storage_per_gb": _decimal(getattr(settings, "COST_STORAGE_PER_GB_USD", "0.10")),
+        "compute_per_unit": _decimal(getattr(settings, "COST_COMPUTE_PER_UNIT_USD", "0.00002")),
+    }
+
+
+def _emit_budget_alerts(
+    org: Organization,
+    snapshot: OrganizationCostSnapshot,
+    budget: OrganizationBudget,
+) -> int:
+    from .services.notifications import create_and_push
+
+    if not budget.is_active or budget.monthly_budget_usd <= 0:
+        return 0
+
+    projected = _decimal(snapshot.projected_monthly_cost_usd)
+    budget_amount = _decimal(budget.monthly_budget_usd)
+    utilization = (projected / budget_amount * Decimal("100")) if budget_amount > 0 else Decimal("0")
+    month_tag = snapshot.month.strftime("%Y-%m")
+
+    thresholds = [
+        (budget.warning_threshold_percent, "warning"),
+        (budget.critical_threshold_percent, "critical"),
+    ]
+    sent = 0
+    for threshold, level in thresholds:
+        if utilization < _decimal(threshold):
+            continue
+        dedup_key = f"soroscan:budget_alert:{org.id}:{month_tag}:{threshold}"
+        if not cache.add(dedup_key, "1", timeout=3600):
+            continue
+        create_and_push(
+            user=org.owner,
+            notification_type="alert",
+            title=f"Budget {level.title()} Threshold Reached",
+            message=(
+                f"Projected monthly cost is ${snapshot.projected_monthly_cost_usd} "
+                f"({utilization.quantize(Decimal('0.01'))}%) for organization '{org.name}'."
+            ),
+            link="/admin/ingest/organizationcostsnapshot/",
+        )
+        sent += 1
+    return sent
+
+
+@shared_task(name="ingest.tasks.aggregate_organization_costs")
+def aggregate_organization_costs(month: str | None = None) -> dict[str, Any]:
+    """
+    Aggregate organization usage into monthly cost snapshots and projections.
+    """
+    if month:
+        parsed = datetime.strptime(month, "%Y-%m").date()
+        start_date = _month_start(parsed)
+    else:
+        start_date = _month_start()
+    end_date = _month_end(start_date)
+
+    start_dt = timezone.make_aware(datetime.combine(start_date, datetime.min.time()))
+    end_dt = timezone.make_aware(datetime.combine(end_date, datetime.max.time()))
+
+    pricing = _cost_pricing()
+    results: list[dict[str, Any]] = []
+
+    for org in Organization.objects.all():
+        contract_ids = list(
+            TrackedContract.objects.filter(organization=org).values_list("id", flat=True)
+        )
+        if not contract_ids:
+            snapshot, _ = OrganizationCostSnapshot.objects.update_or_create(
+                organization=org,
+                month=start_date,
+                defaults={
+                    "rpc_calls": 0,
+                    "storage_bytes": 0,
+                    "compute_units": 0,
+                    "rpc_cost_usd": Decimal("0"),
+                    "storage_cost_usd": Decimal("0"),
+                    "compute_cost_usd": Decimal("0"),
+                    "actual_cost_usd": Decimal("0"),
+                    "projected_monthly_cost_usd": Decimal("0"),
+                    "breakdown": {"contracts": {}, "event_types": {}, "storage": {}},
+                },
+            )
+            results.append({"organization_id": org.id, "projected_monthly_cost_usd": str(snapshot.projected_monthly_cost_usd)})
+            continue
+
+        invocations = ContractInvocation.objects.filter(
+            contract_id__in=contract_ids,
+            created_at__gte=start_dt,
+            created_at__lte=end_dt,
+        )
+        events = ContractEvent.objects.filter(
+            contract_id__in=contract_ids,
+            timestamp__gte=start_dt,
+            timestamp__lte=end_dt,
+        ).select_related("contract")
+
+        rpc_calls = invocations.count()
+        event_count = events.count()
+        storage_bytes = 0
+        by_contract: dict[str, dict[str, Any]] = {}
+        by_event_type: dict[str, int] = {}
+
+        for event in events.iterator(chunk_size=500):
+            payload_blob = json.dumps(event.payload or {}, sort_keys=True)
+            payload_size = len(payload_blob.encode("utf-8"))
+            storage_bytes += payload_size
+
+            contract_key = event.contract.contract_id
+            info = by_contract.setdefault(
+                contract_key,
+                {
+                    "events": 0,
+                    "storage_bytes": 0,
+                    "rpc_calls": 0,
+                },
+            )
+            info["events"] += 1
+            info["storage_bytes"] += payload_size
+
+            by_event_type[event.event_type] = by_event_type.get(event.event_type, 0) + 1
+
+        invocations_per_contract = invocations.values("contract__contract_id").annotate(count=Count("id"))
+        for row in invocations_per_contract:
+            contract_key = row["contract__contract_id"]
+            info = by_contract.setdefault(
+                contract_key,
+                {
+                    "events": 0,
+                    "storage_bytes": 0,
+                    "rpc_calls": 0,
+                },
+            )
+            info["rpc_calls"] = row["count"]
+
+        compute_units = rpc_calls + (event_count * 2)
+
+        storage_gb = _decimal(storage_bytes) / _decimal(1024**3)
+        rpc_cost = _round_cost(_decimal(rpc_calls) * pricing["rpc_per_call"])
+        storage_cost = _round_cost(storage_gb * pricing["storage_per_gb"])
+        compute_cost = _round_cost(_decimal(compute_units) * pricing["compute_per_unit"])
+        actual_cost = _round_cost(rpc_cost + storage_cost + compute_cost)
+
+        today = timezone.now().date()
+        if today < start_date:
+            days_elapsed = 1
+        elif today > end_date:
+            days_elapsed = (end_date - start_date).days + 1
+        else:
+            days_elapsed = max(1, (today - start_date).days + 1)
+        days_in_month = (end_date - start_date).days + 1
+        projected_cost = _round_cost(actual_cost * _decimal(days_in_month) / _decimal(days_elapsed))
+
+        total_contract_events = sum(v["events"] for v in by_contract.values()) or 1
+        for data in by_contract.values():
+            weight = _decimal(data["events"]) / _decimal(total_contract_events)
+            allocated_storage = _round_cost(storage_cost * weight)
+            allocated_compute = _round_cost(compute_cost * weight)
+            allocated_rpc = _round_cost(_decimal(data.get("rpc_calls", 0)) * pricing["rpc_per_call"])
+            data["estimated_cost_usd"] = str(_round_cost(allocated_storage + allocated_compute + allocated_rpc))
+
+        breakdown = {
+            "contracts": by_contract,
+            "event_types": by_event_type,
+            "storage": {
+                "bytes": storage_bytes,
+                "gigabytes": float(storage_gb.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+            },
+        }
+
+        snapshot, _ = OrganizationCostSnapshot.objects.update_or_create(
+            organization=org,
+            month=start_date,
+            defaults={
+                "rpc_calls": rpc_calls,
+                "storage_bytes": storage_bytes,
+                "compute_units": compute_units,
+                "rpc_cost_usd": rpc_cost,
+                "storage_cost_usd": storage_cost,
+                "compute_cost_usd": compute_cost,
+                "actual_cost_usd": actual_cost,
+                "projected_monthly_cost_usd": projected_cost,
+                "breakdown": breakdown,
+            },
+        )
+
+        budget = OrganizationBudget.objects.filter(organization=org).first()
+        alerts_sent = _emit_budget_alerts(org, snapshot, budget) if budget else 0
+        results.append(
+            {
+                "organization_id": org.id,
+                "rpc_calls": rpc_calls,
+                "storage_bytes": storage_bytes,
+                "compute_units": compute_units,
+                "actual_cost_usd": str(actual_cost),
+                "projected_monthly_cost_usd": str(projected_cost),
+                "alerts_sent": alerts_sent,
+            }
+        )
+
+    return {
+        "month": start_date.isoformat(),
+        "organizations": results,
+    }
 
 
 # ---------------------------------------------------------------------------

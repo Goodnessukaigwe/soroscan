@@ -13,13 +13,23 @@ import responses
 from celery.exceptions import Retry
 from django.utils import timezone
 
-from soroscan.ingest.models import AdminAction, EventDeduplicationLog, RemediationIncident, RemediationRule, WebhookDeliveryLog, WebhookSubscription
+from soroscan.ingest.models import (
+    AdminAction,
+    AlertRule,
+    EventDeduplicationLog,
+    RemediationIncident,
+    RemediationRule,
+    WebhookDeadLetter,
+    WebhookDeliveryLog,
+    WebhookSubscription,
+)
 from soroscan.ingest.tasks import (
     cleanup_old_dedup_logs,
     cleanup_webhook_delivery_logs,
     dispatch_webhook,
     evaluate_remediation_rules,
     process_new_event,
+    send_alert,
     validate_contract_payload_schema,
     validate_event_payload,
 )
@@ -128,7 +138,12 @@ class TestValidateContractPayloadSchema:
 class TestDispatchWebhookSuccess:
     @responses.activate
     def test_successful_delivery_returns_true(self, webhook, event):
-        responses.add(responses.POST, webhook.target_url, status=200)
+        responses.add(
+            responses.POST,
+            webhook.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "ok"},
+        )
 
         result = dispatch_webhook.apply(args=[webhook.id, event.id])
 
@@ -139,7 +154,12 @@ class TestDispatchWebhookSuccess:
     def test_success_resets_failure_count(self, webhook, event):
         webhook.failure_count = 3
         webhook.save()
-        responses.add(responses.POST, webhook.target_url, status=200)
+        responses.add(
+            responses.POST,
+            webhook.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "ok"},
+        )
 
         dispatch_webhook.apply(args=[webhook.id, event.id])
 
@@ -149,7 +169,12 @@ class TestDispatchWebhookSuccess:
 
     @responses.activate
     def test_delivery_log_created_on_success(self, webhook, event):
-        responses.add(responses.POST, webhook.target_url, status=200)
+        responses.add(
+            responses.POST,
+            webhook.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "ok"},
+        )
 
         dispatch_webhook.apply(args=[webhook.id, event.id])
 
@@ -166,6 +191,7 @@ class TestDispatchWebhookSuccess:
             responses.POST, webhook.target_url,
             status=201,
             body="not-json-at-all",
+            headers={"X-SoroScan-Ack": "ok"},
         )
 
         result = dispatch_webhook.apply(args=[webhook.id, event.id])
@@ -184,7 +210,12 @@ class TestDispatchWebhookHmac:
     @responses.activate
     def test_signature_header_present(self, webhook, event):
         """Every outgoing request must include X-SoroScan-Signature."""
-        responses.add(responses.POST, webhook.target_url, status=200)
+        responses.add(
+            responses.POST,
+            webhook.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "ok"},
+        )
 
         dispatch_webhook.apply(args=[webhook.id, event.id])
 
@@ -195,7 +226,12 @@ class TestDispatchWebhookHmac:
     @responses.activate
     def test_signature_format_sha256_prefix(self, webhook, event):
         """Signature must be ``sha256=<hex>``."""
-        responses.add(responses.POST, webhook.target_url, status=200)
+        responses.add(
+            responses.POST,
+            webhook.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "ok"},
+        )
 
         dispatch_webhook.apply(args=[webhook.id, event.id])
 
@@ -205,7 +241,12 @@ class TestDispatchWebhookHmac:
     @responses.activate
     def test_signature_is_valid_hmac(self, webhook, event):
         """Signature must be the HMAC-SHA256 of the sorted-JSON payload."""
-        responses.add(responses.POST, webhook.target_url, status=200)
+        responses.add(
+            responses.POST,
+            webhook.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "ok"},
+        )
 
         dispatch_webhook.apply(args=[webhook.id, event.id])
 
@@ -228,7 +269,12 @@ class TestDispatchWebhookHmac:
     def test_signature_format_sha1_when_configured(self, webhook, event):
         webhook.signature_algorithm = WebhookSubscription.SIGNATURE_SHA1
         webhook.save(update_fields=["signature_algorithm"])
-        responses.add(responses.POST, webhook.target_url, status=200)
+        responses.add(
+            responses.POST,
+            webhook.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "ok"},
+        )
 
         dispatch_webhook.apply(args=[webhook.id, event.id])
 
@@ -291,6 +337,44 @@ class TestDispatchWebhookRetry:
         assert log.success is False
         assert log.status_code is None
         assert "timeout" in log.error
+
+    @responses.activate
+    def test_missing_ack_header_triggers_retry(self, webhook, event):
+        responses.add(responses.POST, webhook.target_url, status=200)
+
+        with pytest.raises(Retry):
+            dispatch_webhook.apply(args=[webhook.id, event.id], throw=True)
+
+    @responses.activate
+    def test_invalid_ack_header_triggers_retry(self, webhook, event):
+        responses.add(
+            responses.POST,
+            webhook.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "nope"},
+        )
+
+        with pytest.raises(Retry):
+            dispatch_webhook.apply(args=[webhook.id, event.id], throw=True)
+
+    @responses.activate
+    def test_escalation_policy_sends_slack_on_threshold(self, webhook, event):
+        webhook.escalation_policy = [
+            {
+                "channel": "slack",
+                "target": "https://ops.example.com/slack",
+                "after_failures": 1,
+            }
+        ]
+        webhook.save(update_fields=["escalation_policy"])
+
+        responses.add(responses.POST, webhook.target_url, status=500)
+        responses.add(responses.POST, "https://ops.example.com/slack", status=200)
+
+        with pytest.raises(Retry):
+            dispatch_webhook.apply(args=[webhook.id, event.id], throw=True)
+
+        assert len(responses.calls) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +453,18 @@ class TestDispatchWebhookSuspension:
         assert WebhookDeliveryLog.objects.filter(subscription=webhook, event=event).exists()
 
     @responses.activate
+    def test_dead_letter_created_when_retries_exhausted(self, webhook, event):
+        responses.add(responses.POST, webhook.target_url, status=500)
+
+        with pytest.raises(requests.exceptions.HTTPError):
+            dispatch_webhook.apply(args=[webhook.id, event.id], retries=5, throw=True)
+
+        dlq = WebhookDeadLetter.objects.get(subscription=webhook, event=event)
+        assert dlq.status_code == 500
+        assert dlq.retries_exhausted == 6
+        assert dlq.resolved is False
+
+    @responses.activate
     def test_suspended_subscription_skipped(self, contract, event):
         """dispatch_webhook returns False immediately for suspended subscriptions."""
         suspended = WebhookSubscriptionFactory(
@@ -436,6 +532,7 @@ class TestDispatchWebhookTimeout:
         with patch("soroscan.ingest.tasks.requests.post") as mock_post:
             mock_response = Mock()
             mock_response.status_code = 200
+            mock_response.headers = {"X-SoroScan-Ack": "ok"}
             mock_post.return_value = mock_response
 
             dispatch_webhook.apply(args=[webhook.id, event.id])
@@ -511,8 +608,18 @@ class TestProcessNewEvent:
             contract=contract, event_type="transfer", is_active=True,
         )
 
-        responses.add(responses.POST, webhook_swap.target_url, status=200)
-        responses.add(responses.POST, webhook_all.target_url, status=200)
+        responses.add(
+            responses.POST,
+            webhook_swap.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "ok"},
+        )
+        responses.add(
+            responses.POST,
+            webhook_all.target_url,
+            status=200,
+            headers={"X-SoroScan-Ack": "ok"},
+        )
 
         event_data = {
             "contract_id": contract.contract_id,
@@ -596,6 +703,32 @@ class TestProcessNewEvent:
         )
 
         mock_delay.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# send_alert deduplication
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestSendAlertDeduplication:
+    @patch("soroscan.ingest.tasks._send_slack_alert")
+    def test_identical_alerts_are_deduplicated(self, mock_slack, contract):
+        event = ContractEventFactory(contract=contract, event_type="swap")
+        rule = AlertRule.objects.create(
+            contract=contract,
+            name="Swap Alert",
+            condition={"op": "eq", "field": "event_type", "value": "swap"},
+            action_type="slack",
+            action_target="https://ops.example.com/slack",
+            is_active=True,
+        )
+
+        first = send_alert.apply(args=[rule.id, event.id]).result
+        second = send_alert.apply(args=[rule.id, event.id]).result
+
+        assert first == "sent"
+        assert second == "skipped:deduplicated"
+        assert mock_slack.call_count == 1
 
 
 # ---------------------------------------------------------------------------

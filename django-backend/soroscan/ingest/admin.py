@@ -20,9 +20,12 @@ from .models import (
     AuditLog,
     ContractABI,
     ContractABIVersion,
+    ContractDependency,
     ContractDeployment,
     ContractEvent,
+    DependencyImpactAssessment,
     ContractMetadata,
+    CallGraph,
     ContractSigningKey,
     ContractQuota,
     ContractSource,
@@ -33,6 +36,8 @@ from .models import (
     IndexerState,
     IngestError,
     Organization,
+    OrganizationBudget,
+    OrganizationCostSnapshot,
     OrganizationMembership,
     PIIField,
     RemediationIncident,
@@ -40,6 +45,7 @@ from .models import (
     Team,
     TeamMembership,
     TrackedContract,
+    WebhookDeadLetter,
     WebhookDeliveryLog,
     WebhookSubscription,
 )
@@ -131,6 +137,36 @@ class OrganizationMembershipAdmin(admin.ModelAdmin):
     list_display = ["organization", "user", "role", "invited_by", "joined_at"]
     list_filter = ["role"]
     search_fields = ["organization__name", "user__username"]
+
+
+@admin.register(OrganizationBudget)
+class OrganizationBudgetAdmin(admin.ModelAdmin):
+    list_display = [
+        "organization",
+        "monthly_budget_usd",
+        "warning_threshold_percent",
+        "critical_threshold_percent",
+        "is_active",
+        "updated_at",
+    ]
+    list_filter = ["is_active"]
+    search_fields = ["organization__name", "organization__slug"]
+
+
+@admin.register(OrganizationCostSnapshot)
+class OrganizationCostSnapshotAdmin(admin.ModelAdmin):
+    list_display = [
+        "organization",
+        "month",
+        "rpc_calls",
+        "storage_bytes",
+        "compute_units",
+        "actual_cost_usd",
+        "projected_monthly_cost_usd",
+    ]
+    list_filter = ["month"]
+    search_fields = ["organization__name", "organization__slug"]
+    readonly_fields = ["created_at", "updated_at"]
 
 
 
@@ -480,7 +516,15 @@ class WebhookSubscriptionAdmin(AdminAuditMixin, admin.ModelAdmin):
             "fields": ("contract", "target_url", "event_type", "is_active"),
         }),
         ("Configuration", {
-            "fields": ("timeout_seconds", "signature_algorithm", "filter_condition"),
+            "fields": (
+                "timeout_seconds",
+                "signature_algorithm",
+                "ack_header_name",
+                "ack_header_value",
+                "delivery_sla_seconds",
+                "escalation_policy",
+                "filter_condition",
+            ),
         }),
         ("Retry Configuration", {
             "fields": ("retry_backoff_strategy", "retry_backoff_seconds"),
@@ -599,10 +643,13 @@ class WebhookDeliveryLogAdmin(AdminAuditMixin, admin.ModelAdmin):
         "subscription_url",
         "attempt_number",
         "status_code_display",
+        "acknowledged",
+        "within_sla",
+        "latency_ms",
         "success_display",
         "timestamp",
     ]
-    list_filter = ["success", "timestamp"]
+    list_filter = ["success", "acknowledged", "within_sla", "timestamp"]
     search_fields = ["subscription__target_url", "error"]
     readonly_fields = [
         "subscription",
@@ -610,6 +657,9 @@ class WebhookDeliveryLogAdmin(AdminAuditMixin, admin.ModelAdmin):
         "attempt_number",
         "status_code",
         "success",
+        "acknowledged",
+        "latency_ms",
+        "within_sla",
         "error",
         "timestamp",
     ]
@@ -688,6 +738,32 @@ class WebhookDeliveryLogAdmin(AdminAuditMixin, admin.ModelAdmin):
     actions = ["retry_webhook_delivery"]
 
 
+@admin.register(WebhookDeadLetter)
+class WebhookDeadLetterAdmin(AdminAuditMixin, admin.ModelAdmin):
+    """Manual review queue for webhook deliveries that exhausted retries."""
+
+    list_display = [
+        "id",
+        "subscription",
+        "status_code",
+        "retries_exhausted",
+        "resolved",
+        "created_at",
+    ]
+    list_filter = ["resolved", "created_at", "status_code"]
+    search_fields = ["subscription__target_url", "error"]
+    readonly_fields = [
+        "subscription",
+        "event",
+        "payload",
+        "status_code",
+        "error",
+        "retries_exhausted",
+        "created_at",
+    ]
+    ordering = ["-created_at"]
+
+
 # ---------------------------------------------------------------------------
 # Issue: Tiered rate limiting — APIKey and ContractQuota admin
 # ---------------------------------------------------------------------------
@@ -733,6 +809,34 @@ class APIKeyAdmin(AdminAuditMixin, admin.ModelAdmin):
             quota = APIKey.TIER_QUOTAS.get(obj.tier, 50)
             obj.quota_per_hour = quota if quota is not None else APIKey.UNLIMITED_QUOTA
         super().save_model(request, obj, form, change)
+
+
+@admin.register(ContractDependency)
+class ContractDependencyAdmin(AdminAuditMixin, admin.ModelAdmin):
+    list_display = ["caller", "callee", "call_count", "risk_score", "last_call"]
+    list_filter = ["last_call"]
+    search_fields = ["caller__contract_id", "callee__contract_id"]
+
+
+@admin.register(CallGraph)
+class CallGraphAdmin(AdminAuditMixin, admin.ModelAdmin):
+    list_display = ["contract", "has_cycles", "computed_at"]
+    list_filter = ["has_cycles", "computed_at"]
+    readonly_fields = ["computed_at"]
+
+
+@admin.register(DependencyImpactAssessment)
+class DependencyImpactAssessmentAdmin(AdminAuditMixin, admin.ModelAdmin):
+    list_display = [
+        "root_contract",
+        "impacted_count",
+        "risk_score",
+        "impact_level",
+        "has_cycles",
+        "computed_at",
+    ]
+    list_filter = ["impact_level", "has_cycles", "computed_at"]
+    search_fields = ["root_contract__contract_id", "root_contract__name"]
 
 
 @admin.register(ContractQuota)

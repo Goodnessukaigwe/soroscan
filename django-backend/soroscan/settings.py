@@ -261,6 +261,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "ingest.tasks.aggregate_event_statistics",
         "schedule": 3600,  # hourly
     },
+    "aggregate-organization-costs": {
+        "task": "ingest.tasks.aggregate_organization_costs",
+        "schedule": 3600,  # hourly
+    },
     "reconcile-event-completeness": {
         "task": "ingest.tasks.reconcile_event_completeness",
         "schedule": 300,  # every 5 minutes
@@ -274,6 +278,34 @@ CELERY_BEAT_SCHEDULE = {
 # Data Retention Configuration
 # Number of days to retain deduplication logs before cleanup
 DEDUP_LOG_RETENTION_DAYS = env("DEDUP_LOG_RETENTION_DAYS", default=90, cast=int)
+
+# Alert deduplication window
+ALERT_DEDUP_WINDOW_SECONDS = env.int("ALERT_DEDUP_WINDOW_SECONDS", default=300)
+
+# Webhook delivery + escalation configuration
+WEBHOOK_ESCALATION_TIMEOUT_SECONDS = env.int(
+    "WEBHOOK_ESCALATION_TIMEOUT_SECONDS", default=10
+)
+WEBHOOK_ESCALATION_DEDUP_SECONDS = env.int(
+    "WEBHOOK_ESCALATION_DEDUP_SECONDS", default=300
+)
+WEBHOOK_ESCALATION_SLACK_TARGET = env(
+    "WEBHOOK_ESCALATION_SLACK_TARGET", default=""
+)
+WEBHOOK_ESCALATION_SMS_TARGET = env(
+    "WEBHOOK_ESCALATION_SMS_TARGET", default=""
+)
+WEBHOOK_ESCALATION_PAGERDUTY_TARGET = env(
+    "WEBHOOK_ESCALATION_PAGERDUTY_TARGET", default=""
+)
+
+# Dependency change alert deduplication
+DOWNSTREAM_ALERT_DEDUP_SECONDS = env.int("DOWNSTREAM_ALERT_DEDUP_SECONDS", default=3600)
+
+# Cost model defaults (USD)
+COST_RPC_PER_CALL_USD = env("COST_RPC_PER_CALL_USD", default="0.00001")
+COST_STORAGE_PER_GB_USD = env("COST_STORAGE_PER_GB_USD", default="0.10")
+COST_COMPUTE_PER_UNIT_USD = env("COST_COMPUTE_PER_UNIT_USD", default="0.00002")
 
 # Stellar / Soroban Configuration
 SOROBAN_RPC_URL = env("SOROBAN_RPC_URL", default="https://soroban-testnet.stellar.org")

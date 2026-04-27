@@ -15,6 +15,7 @@ from .views import (
     compliance_export_view,
     contract_event_explorer_view,
     contract_event_types_view,
+    organization_cost_breakdown_view,
     WebhookSubscriptionViewSet,
     contract_timeline_view,
     deletion_requests_view,
@@ -23,6 +24,7 @@ from .views import (
     record_event_view,
     restore_archived_events,
     transaction_events_view,
+    vulnerability_impact_view,
 )
 
 router = DefaultRouter()
@@ -51,12 +53,22 @@ urlpatterns = [
         name="contract-deployments",
     ),
     path("transactions/<str:tx_id>/", transaction_events_view, name="transaction-events"),
+    path(
+        "contracts/<str:contract_id>/vulnerability-impact/",
+        vulnerability_impact_view,
+        name="contract-vulnerability-impact",
+    ),
     path("", include(router.urls)),
     path("record/", record_event_view, name="record-event"),
     path("health/", health_check, name="health-check"),
     path("events/restore-archive/", restore_archived_events, name="restore-archive"),
     path("audit-trail/", audit_trail_view, name="audit-trail"),
     path("admin/ingest-errors/", admin_ingest_errors_view, name="admin-ingest-errors"),
+    path(
+        "admin/organization-costs/",
+        organization_cost_breakdown_view,
+        name="admin-organization-costs",
+    ),
     path("deletion-requests/", deletion_requests_view, name="deletion-requests"),
     path("compliance-export/", compliance_export_view, name="compliance-export"),
 ]

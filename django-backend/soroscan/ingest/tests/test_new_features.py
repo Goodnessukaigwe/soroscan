@@ -485,6 +485,7 @@ class EventSearchTests(TestCase):
 
 class SendAlertTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(username="alertuser", password="pass")
         self.contract = TrackedContract.objects.create(
             contract_id="B" * 56,
@@ -569,6 +570,9 @@ class SendAlertTests(TestCase):
 
         result = send_alert(self.rule.id, 9999)
         self.assertEqual(result, "skipped:event_gone")
+
+    def tearDown(self):
+        cache.clear()
 
 
 class EvaluateAlertRulesTests(TestCase):

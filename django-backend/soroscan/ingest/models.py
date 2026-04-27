@@ -86,6 +86,86 @@ class OrganizationMembership(models.Model):
         return f"{self.user} @ {self.organization} ({self.role})"
 
 
+class OrganizationBudget(models.Model):
+    """Monthly cost budget configuration per organization."""
+
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="budget",
+    )
+    monthly_budget_usd = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Monthly budget ceiling in USD.",
+    )
+    warning_threshold_percent = models.PositiveIntegerField(
+        default=80,
+        validators=[MinValueValidator(1), MaxValueValidator(100)],
+        help_text="Percent threshold for warning alerts.",
+    )
+    critical_threshold_percent = models.PositiveIntegerField(
+        default=100,
+        validators=[MinValueValidator(1), MaxValueValidator(200)],
+        help_text="Percent threshold for critical alerts.",
+    )
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["organization__name"]
+
+    def __str__(self):
+        return f"Budget({self.organization.name}: ${self.monthly_budget_usd})"
+
+
+class OrganizationCostSnapshot(models.Model):
+    """Monthly cost and usage snapshot for one organization."""
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="cost_snapshots",
+    )
+    month = models.DateField(
+        help_text="Month bucket represented by first day of the month (UTC).",
+    )
+    rpc_calls = models.PositiveBigIntegerField(default=0)
+    storage_bytes = models.PositiveBigIntegerField(default=0)
+    compute_units = models.PositiveBigIntegerField(default=0)
+    rpc_cost_usd = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    storage_cost_usd = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    compute_cost_usd = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    actual_cost_usd = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    projected_monthly_cost_usd = models.DecimalField(
+        max_digits=14,
+        decimal_places=4,
+        default=0,
+    )
+    breakdown = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Cost breakdown by contract, event type, and storage consumption.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-month", "organization__name"]
+        unique_together = [("organization", "month")]
+        indexes = [
+            models.Index(fields=["organization", "month"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"CostSnapshot({self.organization.name}, {self.month}, "
+            f"projected=${self.projected_monthly_cost_usd})"
+        )
+
+
 class Team(models.Model):
     """
     Multi-tenant organization: groups users and shared tracked contracts.
@@ -676,6 +756,30 @@ class WebhookSubscription(models.Model):
         default=SIGNATURE_SHA256,
         help_text="HMAC algorithm used for X-SoroScan-Signature header.",
     )
+    ack_header_name = models.CharField(
+        max_length=64,
+        default="X-SoroScan-Ack",
+        help_text="HTTP response header that must be present to acknowledge receipt.",
+    )
+    ack_header_value = models.CharField(
+        max_length=128,
+        default="ok",
+        help_text="Expected acknowledgement header value.",
+    )
+    delivery_sla_seconds = models.PositiveIntegerField(
+        default=30,
+        validators=[MinValueValidator(1), MaxValueValidator(3600)],
+        help_text="SLA target in seconds for successful delivery acknowledgements.",
+    )
+    escalation_policy = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "Ordered escalation policy list, e.g. "
+            '[{"channel": "slack", "target": "...", "after_failures": 2}]. '
+            "Defaults to Slack -> SMS -> PagerDuty when empty."
+        ),
+    )
     filter_condition = models.JSONField(
         blank=True,
         null=True,
@@ -764,6 +868,21 @@ class WebhookDeliveryLog(models.Model):
         blank=True,
         help_text="Size of the webhook payload in bytes",
     )
+    acknowledged = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True when the subscriber returned the expected acknowledgement header.",
+    )
+    latency_ms = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Observed delivery latency in milliseconds.",
+    )
+    within_sla = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True when acknowledged delivery met the configured SLA target.",
+    )
 
     class Meta:
         ordering = ["-timestamp"]
@@ -774,6 +893,57 @@ class WebhookDeliveryLog(models.Model):
     def __str__(self):
         status_label = "OK" if self.success else f"FAIL({self.status_code})"
         return f"Delivery #{self.attempt_number} [{status_label}] sub={self.subscription_id}"
+
+
+class WebhookDeadLetter(models.Model):
+    """
+    Dead-letter queue entries for webhook deliveries that exhausted retries.
+
+    Operators can review and manually replay or resolve these records.
+    """
+
+    subscription = models.ForeignKey(
+        WebhookSubscription,
+        on_delete=models.CASCADE,
+        related_name="dead_letters",
+        help_text="Subscription whose delivery failed terminally",
+    )
+    event = models.ForeignKey(
+        "ContractEvent",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="webhook_dead_letters",
+        help_text="Event payload associated with the failed delivery",
+    )
+    payload = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Serialized webhook payload for manual replay/review",
+    )
+    status_code = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Last observed subscriber HTTP status code",
+    )
+    error = models.TextField(blank=True)
+    retries_exhausted = models.PositiveIntegerField(
+        default=0,
+        help_text="How many attempts were exhausted before dead-lettering",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    resolved = models.BooleanField(default=False, db_index=True)
+    resolution_note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["subscription", "created_at"]),
+            models.Index(fields=["resolved", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"WebhookDeadLetter(sub={self.subscription_id}, resolved={self.resolved})"
 
 
 class EventDeduplicationLog(models.Model):
@@ -1214,6 +1384,10 @@ class ContractDependency(models.Model):
         default=0,
         help_text="Total number of times this dependency has been observed",
     )
+    risk_score = models.FloatField(
+        default=0.0,
+        help_text="Edge-level risk score derived from call frequency and graph topology.",
+    )
     first_call = models.DateTimeField(
         auto_now_add=True,
         help_text="Timestamp of the first observed call",
@@ -1229,6 +1403,55 @@ class ContractDependency(models.Model):
 
     def __str__(self):
         return f"{self.caller.name} -> {self.callee.name} ({self.call_count})"
+
+
+class DependencyImpactAssessment(models.Model):
+    """
+    Latest vulnerability impact assessment for a root contract.
+
+    Stores blast radius, downstream contracts, and a quantified risk score.
+    """
+
+    IMPACT_LOW = "low"
+    IMPACT_MEDIUM = "medium"
+    IMPACT_HIGH = "high"
+    IMPACT_CRITICAL = "critical"
+    IMPACT_CHOICES = [
+        (IMPACT_LOW, "Low"),
+        (IMPACT_MEDIUM, "Medium"),
+        (IMPACT_HIGH, "High"),
+        (IMPACT_CRITICAL, "Critical"),
+    ]
+
+    root_contract = models.OneToOneField(
+        TrackedContract,
+        on_delete=models.CASCADE,
+        related_name="dependency_impact",
+    )
+    affected_contracts = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Ordered list of downstream impacted contract IDs.",
+    )
+    impacted_count = models.PositiveIntegerField(default=0)
+    has_cycles = models.BooleanField(default=False)
+    risk_score = models.FloatField(default=0.0)
+    impact_level = models.CharField(
+        max_length=16,
+        choices=IMPACT_CHOICES,
+        default=IMPACT_LOW,
+    )
+    assessment_details = models.JSONField(default=dict, blank=True)
+    computed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-computed_at"]
+
+    def __str__(self):
+        return (
+            f"DependencyImpact({self.root_contract.contract_id[:8]}..., "
+            f"score={self.risk_score:.1f})"
+        )
 
 
 class CallGraph(models.Model):
