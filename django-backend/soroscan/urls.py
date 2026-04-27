@@ -16,6 +16,7 @@ from rest_framework_simplejwt.views import (
 
 from soroscan.graphql_views import ThrottledGraphQLView
 from soroscan.health import health_view, readiness_view
+from soroscan.meta_views import db_pool_stats_view
 from soroscan.ingest.views import audit_trail_view, contract_status, rate_limit_analytics_view
 from soroscan.ingest.schema import schema
 
@@ -31,6 +32,7 @@ urlpatterns = [
     path("api/audit-trail/", audit_trail_view, name="audit-trail"),
     path("api/contracts/status/", contract_status, name="contract-status"),
     path("api/analytics/rate-limits/", rate_limit_analytics_view, name="rate-limit-analytics"),
+    path("api/meta/db-pool/", db_pool_stats_view, name="db-pool-stats"),
     path("api/ingest/", include("soroscan.ingest.urls")),
     path("graphql/", ThrottledGraphQLView.as_view(schema=schema)),
     # JWT Authentication

@@ -47,7 +47,7 @@ MIDDLEWARE = [
     "django_prometheus.middleware.PrometheusAfterMiddleware",   # must be last
 ]
 
-ROOT_URLCONF = "soroscan.urls"  # use main urls.py which has the /metrics route
+ROOT_URLCONF = "soroscan.urls_test"  # safe mirror — excludes strawberry/GDAL import
 
 TEMPLATES = [
     {
