@@ -1,0 +1,413 @@
+openapi: 3.0.3
+info:
+  title: SoroScan API
+  description: >
+    SoroScan is an open-source event indexer that turns raw Soroban smart contract
+    activity into queryable REST endpoints, GraphQL APIs, and real-time webhooks.
+  version: 1.0.0
+  contact:
+    email: support@[soroscan.io](https://soroscan.io)
+
+servers:
+  - url: https://api.soroscan.io/api/ingest
+    description: Production
+  - url: http://localhost:8000/api/ingest
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+
+  schemas:
+    TrackedContract:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        contract_id:
+          type: string
+        alias:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        max_events_per_minute:
+          type: integer
+          nullable: true
+
+    ContractEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        contract:
+          type: string
+        event_type:
+          type: string
+        ledger:
+          type: integer
+        tx_hash:
+          type: string
+        data:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookSubscription:
+      type: object
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        triggers:
+          type: array
+          items:
+            type: string
+        contract_id:
+          type: string
+        secret:
+          type: string
+        is_active:
+          type: boolean
+
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        key:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ContractStats:
+      type: object
+      properties:
+        contract_id:
+          type: string
+        name:
+          type: string
+        total_events:
+          type: integer
+        unique_event_types:
+          type: integer
+        latest_ledger:
+          type: integer
+        last_activity:
+          type: string
+          format: date-time
+
+    RateLimitStatus:
+      type: object
+      properties:
+        contract_id:
+          type: string
+        max_events_per_minute:
+          type: integer
+          nullable: true
+        current_usage:
+          type: integer
+        remaining:
+          type: integer
+        resets_in_seconds:
+          type: integer
+
+paths:
+  /contracts/:
+    get:
+      summary: List all tracked contracts
+      tags: [Contracts]
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: is_active
+          in: query
+          schema:
+            type: boolean
+        - name: ordering
+          in: query
+          schema:
+            type: string
+            enum: [created_at, -created_at, name, -name]
+      responses:
+        '200':
+          description: List of contracts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TrackedContract'
+    post:
+      summary: Register a new contract
+      tags: [Contracts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackedContract'
+      responses:
+        '201':
+          description: Contract created
+
+  /contracts/{id}/:
+    get:
+      summary: Get contract details
+      tags: [Contracts]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Contract details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackedContract'
+    put:
+      summary: Update contract
+      tags: [Contracts]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackedContract'
+      responses:
+        '200':
+          description: Contract updated
+    delete:
+      summary: Delete contract
+      tags: [Contracts]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Contract deleted
+
+  /contracts/{contract_id}/events/:
+    get:
+      summary: Get events for a specific contract
+      tags: [Contracts]
+      parameters:
+        - name: contract_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContractEvent'
+
+  /contracts/{contract_id}/stats/:
+    get:
+      summary: Get statistics for a contract
+      tags: [Contracts]
+      parameters:
+        - name: contract_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Contract statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractStats'
+
+  /contracts/{contract_id}/timeline/:
+    get:
+      summary: Get contract event timeline
+      tags: [Contracts]
+      parameters:
+        - name: contract_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Timeline data
+
+  /contracts/{contract_id}/event-types/:
+    get:
+      summary: List all event types for a contract
+      tags: [Contracts]
+      parameters:
+        - name: contract_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of event types
+
+  /events/:
+    get:
+      summary: List all contract events
+      tags: [Events]
+      parameters:
+        - name: contract
+          in: query
+          schema:
+            type: string
+        - name: event_type
+          in: query
+          schema:
+            type: string
+        - name: ledger_min
+          in: query
+          schema:
+            type: integer
+        - name: ledger_max
+          in: query
+          schema:
+            type: integer
+        - name: ordering
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContractEvent'
+
+  /transactions/{tx_id}/:
+    get:
+      summary: Get all events for a transaction
+      tags: [Events]
+      parameters:
+        - name: tx_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Transaction events
+
+  /webhooks/:
+    get:
+      summary: List webhook subscriptions
+      tags: [Webhooks]
+      responses:
+        '200':
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookSubscription'
+    post:
+      summary: Create a webhook subscription
+      tags: [Webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookSubscription'
+      responses:
+        '201':
+          description: Webhook created
+
+  /webhooks/{id}/:
+    delete:
+      summary: Delete a webhook subscription
+      tags: [Webhooks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Webhook deleted
+
+  /api-keys/:
+    get:
+      summary: List API keys
+      tags: [API Keys]
+      responses:
+        '200':
+          description: List of API keys
+    post:
+      summary: Create a new API key
+      tags: [API Keys]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        '201':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKey'
+
+  /health/:
+    get:
+      summary: Health check
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
