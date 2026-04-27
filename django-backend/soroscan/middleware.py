@@ -7,6 +7,7 @@ import uuid
 
 from django.conf import settings
 from django.db import connection
+from django.http import JsonResponse
 
 from .log_context import set_request_id
 
@@ -89,5 +90,21 @@ class SlowQueryMiddleware:
         if headers and hasattr(response, "__setitem__"):
             for name, value in headers.items():
                 response[name] = value
+
+        return response
+
+
+class Json404Middleware:
+    """Return JSON for 404 responses to keep API error format consistent."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+
+        content_type = response.get("Content-Type", "") if hasattr(response, "get") else ""
+        if response.status_code == 404 and not content_type.startswith("application/json"):
+            return JsonResponse({"detail": "Not found."}, status=404)
 
         return response
