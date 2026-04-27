@@ -1,0 +1,29 @@
+## 📌 Summary
+Implements request ID tracking to all HTTP logs (#275).
+
+## 🚀 What was done
+- Created a `RequestIdMiddleware` to manage `X-Request-ID` headers.
+- Updated the global logger configuration to automatically include the request context ID.
+- Modified the centralized error handler to append the `request_id` to all error payloads.
+- Ensured the request ID is propagated through the request context.
+
+## 🧠 Key Logic
+- **Header Interception:** The middleware prioritizes an incoming `X-Request-ID` from the client; otherwise, it generates a new v4 UUID.
+- **Contextual Logging:** Leveraged AsyncLocalStorage (or equivalent context management) to ensure loggers can access the ID without manual drilling.
+- **Error Correlation:** Added a hook in the response pipeline to ensure failed requests return the ID to the client for easy reporting.
+
+## 🔒 Validations
+- Verified that concurrent requests maintain unique, isolated IDs.
+- Confirmed that the `X-Request-ID` is returned in the response headers.
+- Checked that log aggregators can successfully filter by the new `request_id` field.
+
+## 🧪 Tests
+- ✅ UUID generation for requests missing the header.
+- ✅ ID persistence across multiple log calls within a single request.
+- ✅ JSON structure validation for error responses (must contain `request_id`).
+- ✅ Header passthrough validation when `X-Request-ID` is provided by the caller.
+
+## 📎 Notes
+- This change is foundational for future distributed tracing and advanced log analysis.
+
+Closes #275

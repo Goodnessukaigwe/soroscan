@@ -20,7 +20,11 @@ __all__ = [
     "backfill_batch_duration_seconds",
     "webhook_deliveries_total",
     "webhook_delivery_duration_seconds",
+    "webhook_ack_total",
+    "webhook_sla_total",
+    "webhook_escalations_total",
     "alert_rules_evaluated_total",
+    "alert_deduplicated_total",
     "remediation_rules_evaluated_total",
     "archive_events_total",
     "ledgers_scanned_total",
@@ -33,6 +37,7 @@ __all__ = [
     "event_streaming_total",
     "ledger_gaps_total",
     "missing_events_total",
+    "event_ingestion_rate_gauge",
 ]
 
 
@@ -140,11 +145,39 @@ webhook_delivery_duration_seconds = _get_or_create(
     "End-to-end latency of a single webhook delivery attempt in seconds",
 )
 
+webhook_ack_total = _get_or_create(
+    Counter,
+    "soroscan_webhook_ack_total",
+    "Webhook acknowledgement outcomes by validation result",
+    ["status"],
+)
+
+webhook_sla_total = _get_or_create(
+    Counter,
+    "soroscan_webhook_sla_total",
+    "Webhook delivery SLA outcomes for acknowledged deliveries",
+    ["outcome"],
+)
+
+webhook_escalations_total = _get_or_create(
+    Counter,
+    "soroscan_webhook_escalations_total",
+    "Number of escalation notifications sent for webhook failures",
+    ["channel", "status"],
+)
+
 alert_rules_evaluated_total = _get_or_create(
     Counter,
     "soroscan_alert_rules_evaluated_total",
     "Number of alert-rule evaluations, labelled by outcome",
     ["outcome"],
+)
+
+alert_deduplicated_total = _get_or_create(
+    Counter,
+    "soroscan_alert_deduplicated_total",
+    "Number of alert sends skipped due to deduplication",
+    ["scope"],
 )
 
 remediation_rules_evaluated_total = _get_or_create(
@@ -231,4 +264,10 @@ missing_events_total = _get_or_create(
     "soroscan_missing_events_total",
     "Total number of missing ledgers/events detected by reconciliation",
     ["contract_id"],
+)
+
+event_ingestion_rate_gauge = _get_or_create(
+    Gauge,
+    "soroscan_event_ingestion_rate",
+    "Current event ingestion rate in events per second",
 )

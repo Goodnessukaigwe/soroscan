@@ -35,6 +35,8 @@ from .models import (
     ContractInvocation,
     ContractSource,
     ContractVerification,
+    OrganizationCostSnapshot,
+    OrganizationBudget,
     IngestError,
     IndexerState,
     Team,
@@ -49,6 +51,8 @@ from .serializers import (
     ContractSourceSerializer,
     ContractVerificationSerializer,
     EventSearchSerializer,
+    OrganizationBudgetSerializer,
+    OrganizationCostSnapshotSerializer,
     RecordEventRequestSerializer,
     TeamMemberAddSerializer,
     TeamSerializer,
@@ -126,6 +130,12 @@ class TrackedContractViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        from .tasks import alert_downstream_contract_change
+
+        alert_downstream_contract_change.delay(instance.contract_id, "modified")
 
     def get_queryset(self):
         qs = TrackedContract.objects.all()
@@ -866,6 +876,82 @@ def contract_status(request):
             "events_per_minute": event_agg["events_per_minute"] or 0,
         }
     )
+
+
+@extend_schema(
+    responses=inline_serializer(
+        name="VulnerabilityImpactResponse",
+        fields={
+            "contract_id": serializers.CharField(),
+            "affected_contracts": serializers.JSONField(),
+            "impacted_count": serializers.IntegerField(),
+            "risk_score": serializers.FloatField(),
+            "impact_level": serializers.CharField(),
+            "has_cycles": serializers.BooleanField(),
+        },
+    )
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def vulnerability_impact_view(request, contract_id: str):
+    from .tasks import assess_vulnerability_impact
+
+    result = assess_vulnerability_impact(contract_id)
+    return Response(result)
+
+
+@extend_schema(
+    parameters=[
+        inline_serializer(
+            name="OrganizationCostBreakdownParams",
+            fields={
+                "organization_id": serializers.IntegerField(required=False),
+                "month": serializers.CharField(required=False),
+            },
+        )
+    ],
+    responses=inline_serializer(
+        name="OrganizationCostBreakdownResponse",
+        fields={
+            "results": serializers.JSONField(),
+        },
+    ),
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def organization_cost_breakdown_view(request):
+    """Admin endpoint exposing per-organization cost snapshots and budget state."""
+    if not request.user.is_staff:
+        return Response({"error": "Admin access required"}, status=status.HTTP_403_FORBIDDEN)
+
+    snapshots = OrganizationCostSnapshot.objects.select_related("organization").all()
+    org_id = request.query_params.get("organization_id")
+    month = request.query_params.get("month")
+
+    if org_id:
+        snapshots = snapshots.filter(organization_id=org_id)
+    if month:
+        try:
+            year, month_num = month.split("-", 1)
+            snapshots = snapshots.filter(month__year=int(year), month__month=int(month_num))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "month must be in YYYY-MM format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    budgets = {
+        budget.organization_id: OrganizationBudgetSerializer(budget).data
+        for budget in OrganizationBudget.objects.select_related("organization").all()
+    }
+
+    payload = []
+    for snapshot in snapshots.order_by("-month", "organization__name"):
+        item = OrganizationCostSnapshotSerializer(snapshot).data
+        item["budget"] = budgets.get(snapshot.organization_id)
+        payload.append(item)
+
+    return Response({"results": payload})
 
 
 def contract_timeline_view(request, contract_id: str):

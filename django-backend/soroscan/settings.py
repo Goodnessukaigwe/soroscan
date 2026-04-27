@@ -70,13 +70,14 @@ ENABLE_SILK = env.bool("ENABLE_SILK", default=False)
 MIDDLEWARE = [
     # PrometheusBeforeMiddleware must be first to capture all requests.
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
+    "soroscan.middleware.RequestBodySizeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "soroscan.middleware.ReverseProxyFixedIPMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "soroscan.middleware.RequestIdMiddleware",
     "soroscan.middleware.SlowQueryMiddleware",
-    "soroscan.middleware.Json404Middleware",
+    "soroscan.middleware.ApiDeprecationMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -156,10 +157,11 @@ QUERY_CACHE_TTL_SECONDS = env.int("QUERY_CACHE_TTL_SECONDS", default=60)
 RATE_LIMIT_ANON = env("RATE_LIMIT_ANON", default="60/minute")
 RATE_LIMIT_USER = env("RATE_LIMIT_USER", default="300/minute")
 RATE_LIMIT_INGEST = env("RATE_LIMIT_INGEST", default="10/minute")
-RATE_LIMIT_GRAPHQL = env("RATE_LIMIT_GRAPHQL", default="100/minute")
+RATE_LIMIT_GRAPHQL = env("RATE_LIMIT_GRAPHQL", default="60/minute")
 
 # REST Framework
 REST_FRAMEWORK = {
+    "EXCEPTION_HANDLER": "soroscan.exceptions.custom_exception_handler",
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
@@ -206,8 +208,9 @@ SIMPLE_JWT = {
 }
 
 # CORS
+origins_str = env("ALLOWED_ORIGINS", default="")
+CORS_ALLOWED_ORIGINS = [o.strip() for o in origins_str.split(",") if o.strip()] if origins_str else []
 CORS_ALLOW_ALL_ORIGINS = DEBUG
-CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
 CORS_ALLOW_CREDENTIALS = True  # Required for Apollo Client with credentials: 'include'
 
 # Channels
@@ -261,6 +264,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "ingest.tasks.aggregate_event_statistics",
         "schedule": 3600,  # hourly
     },
+    "aggregate-organization-costs": {
+        "task": "ingest.tasks.aggregate_organization_costs",
+        "schedule": 3600,  # hourly
+    },
     "reconcile-event-completeness": {
         "task": "ingest.tasks.reconcile_event_completeness",
         "schedule": 300,  # every 5 minutes
@@ -274,6 +281,36 @@ CELERY_BEAT_SCHEDULE = {
 # Data Retention Configuration
 # Number of days to retain deduplication logs before cleanup
 DEDUP_LOG_RETENTION_DAYS = env("DEDUP_LOG_RETENTION_DAYS", default=90, cast=int)
+# Number of days to retain contract events before pruning
+EVENT_RETENTION_DAYS = env("EVENT_RETENTION_DAYS", default=30, cast=int)
+
+# Alert deduplication window
+ALERT_DEDUP_WINDOW_SECONDS = env.int("ALERT_DEDUP_WINDOW_SECONDS", default=300)
+
+# Webhook delivery + escalation configuration
+WEBHOOK_ESCALATION_TIMEOUT_SECONDS = env.int(
+    "WEBHOOK_ESCALATION_TIMEOUT_SECONDS", default=10
+)
+WEBHOOK_ESCALATION_DEDUP_SECONDS = env.int(
+    "WEBHOOK_ESCALATION_DEDUP_SECONDS", default=300
+)
+WEBHOOK_ESCALATION_SLACK_TARGET = env(
+    "WEBHOOK_ESCALATION_SLACK_TARGET", default=""
+)
+WEBHOOK_ESCALATION_SMS_TARGET = env(
+    "WEBHOOK_ESCALATION_SMS_TARGET", default=""
+)
+WEBHOOK_ESCALATION_PAGERDUTY_TARGET = env(
+    "WEBHOOK_ESCALATION_PAGERDUTY_TARGET", default=""
+)
+
+# Dependency change alert deduplication
+DOWNSTREAM_ALERT_DEDUP_SECONDS = env.int("DOWNSTREAM_ALERT_DEDUP_SECONDS", default=3600)
+
+# Cost model defaults (USD)
+COST_RPC_PER_CALL_USD = env("COST_RPC_PER_CALL_USD", default="0.00001")
+COST_STORAGE_PER_GB_USD = env("COST_STORAGE_PER_GB_USD", default="0.10")
+COST_COMPUTE_PER_UNIT_USD = env("COST_COMPUTE_PER_UNIT_USD", default="0.00002")
 
 # Stellar / Soroban Configuration
 SOROBAN_RPC_URL = env("SOROBAN_RPC_URL", default="https://soroban-testnet.stellar.org")
@@ -304,11 +341,11 @@ LOGGING = {
     "disable_existing_loggers": False,
     "formatters": {
         "default": {
-            "format": "%(asctime)s %(name)s %(levelname)s %(message)s",
+            "format": "%(asctime)s %(name)s %(levelname)s [req:%(request_id)s] %(message)s",
         },
         "json": {
             "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
-            "format": "%(asctime)s %(name)s %(levelname)s %(message)s",
+            "format": "%(asctime)s %(name)s %(levelname)s %(request_id)s %(message)s",
         },
     },
     "handlers": {
@@ -421,3 +458,15 @@ if SENTRY_DSN:
         send_default_pii=False,
         environment=env("SENTRY_ENVIRONMENT", default="production"),
     )
+
+# --- Request Size Limit (Issue #338) ---
+# Default to 10MB (10 * 1024 * 1024 bytes)
+MAX_REQUEST_BODY_SIZE = env.int("MAX_REQUEST_BODY_SIZE", default=10485760)
+
+# --- API Deprecation (Issue #336) ---
+DEPRECATED_ENDPOINTS = {
+    "/api/audit-trail/": {
+        "sunset": "2026-12-31",
+        "replacement": "/graphql/"
+    }
+}

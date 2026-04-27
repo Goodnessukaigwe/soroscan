@@ -3,7 +3,7 @@ Django Admin configuration for SoroScan models.
 """
 from django import forms
 from django.contrib import admin, messages
-from django.contrib.admin.helpers import ActionForm
+from django.contrib.admin.helpers import ActionForm, ACTION_CHECKBOX_NAME
 from django.db.models import Count
 from django.http import HttpResponse
 from django.urls import path
@@ -20,9 +20,12 @@ from .models import (
     AuditLog,
     ContractABI,
     ContractABIVersion,
+    ContractDependency,
     ContractDeployment,
     ContractEvent,
+    DependencyImpactAssessment,
     ContractMetadata,
+    CallGraph,
     ContractSigningKey,
     ContractQuota,
     ContractSource,
@@ -33,6 +36,8 @@ from .models import (
     IndexerState,
     IngestError,
     Organization,
+    OrganizationBudget,
+    OrganizationCostSnapshot,
     OrganizationMembership,
     PIIField,
     RemediationIncident,
@@ -40,10 +45,11 @@ from .models import (
     Team,
     TeamMembership,
     TrackedContract,
+    WebhookDeadLetter,
     WebhookDeliveryLog,
     WebhookSubscription,
 )
-from .tasks import backfill_contract_events
+from .tasks import backfill_contract_events, dispatch_webhook
 
 
 class BackfillActionForm(ActionForm):
@@ -133,6 +139,36 @@ class OrganizationMembershipAdmin(admin.ModelAdmin):
     search_fields = ["organization__name", "user__username"]
 
 
+@admin.register(OrganizationBudget)
+class OrganizationBudgetAdmin(admin.ModelAdmin):
+    list_display = [
+        "organization",
+        "monthly_budget_usd",
+        "warning_threshold_percent",
+        "critical_threshold_percent",
+        "is_active",
+        "updated_at",
+    ]
+    list_filter = ["is_active"]
+    search_fields = ["organization__name", "organization__slug"]
+
+
+@admin.register(OrganizationCostSnapshot)
+class OrganizationCostSnapshotAdmin(admin.ModelAdmin):
+    list_display = [
+        "organization",
+        "month",
+        "rpc_calls",
+        "storage_bytes",
+        "compute_units",
+        "actual_cost_usd",
+        "projected_monthly_cost_usd",
+    ]
+    list_filter = ["month"]
+    search_fields = ["organization__name", "organization__slug"]
+    readonly_fields = ["created_at", "updated_at"]
+
+
 
 @admin.register(TrackedContract)
 class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
@@ -140,6 +176,7 @@ class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
         "name",
         "alias",
         "contract_id_short",
+        "network",
         "owner",
         "team",
         "is_active",
@@ -150,17 +187,17 @@ class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
         "event_count",
         "created_at",
     ]
-    list_filter = ["is_active", "deprecation_status", "event_filter_type", "created_at"]
+    list_filter = ["is_active", "network", "deprecation_status", "event_filter_type", "created_at"]
     search_fields = ["name", "alias", "contract_id"]
     readonly_fields = ["created_at", "updated_at"]
-    ordering = ["-created_at"]
+    ordering = ["-created_at", "name"]
     action_form = BackfillActionForm
     actions = ["backfill_events"]
     fieldsets = (
         (None, {
             "fields": (
                 "contract_id", "name", "alias", "description",
-                "owner", "team", "is_active",
+                "owner", "team", "network", "is_active",
             ),
         }),
         ("Event Filtering", {
@@ -194,7 +231,7 @@ class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
         queryset = super().get_queryset(request)
         return queryset.annotate(
             _event_count=Count("events", distinct=True)
-        ).select_related("owner")
+        ).select_related("owner", "team")
 
     @admin.display(description="Events")
     def event_count(self, obj):
@@ -479,7 +516,15 @@ class WebhookSubscriptionAdmin(AdminAuditMixin, admin.ModelAdmin):
             "fields": ("contract", "target_url", "event_type", "is_active"),
         }),
         ("Configuration", {
-            "fields": ("timeout_seconds", "signature_algorithm", "filter_condition"),
+            "fields": (
+                "timeout_seconds",
+                "signature_algorithm",
+                "ack_header_name",
+                "ack_header_value",
+                "delivery_sla_seconds",
+                "escalation_policy",
+                "filter_condition",
+            ),
         }),
         ("Retry Configuration", {
             "fields": ("retry_backoff_strategy", "retry_backoff_seconds"),
@@ -598,10 +643,13 @@ class WebhookDeliveryLogAdmin(AdminAuditMixin, admin.ModelAdmin):
         "subscription_url",
         "attempt_number",
         "status_code_display",
+        "acknowledged",
+        "within_sla",
+        "latency_ms",
         "success_display",
         "timestamp",
     ]
-    list_filter = ["success", "timestamp"]
+    list_filter = ["success", "acknowledged", "within_sla", "timestamp"]
     search_fields = ["subscription__target_url", "error"]
     readonly_fields = [
         "subscription",
@@ -609,6 +657,9 @@ class WebhookDeliveryLogAdmin(AdminAuditMixin, admin.ModelAdmin):
         "attempt_number",
         "status_code",
         "success",
+        "acknowledged",
+        "latency_ms",
+        "within_sla",
         "error",
         "timestamp",
     ]
@@ -646,6 +697,71 @@ class WebhookDeliveryLogAdmin(AdminAuditMixin, admin.ModelAdmin):
     @admin.display(description="Success", boolean=True)
     def success_display(self, obj):
         return obj.success
+
+    @admin.action(description="Retry selected webhook deliveries")
+    def retry_webhook_delivery(self, request, queryset):
+        """
+        Manually retry selected webhook deliveries by requeueing the Celery task.
+        Shows a confirmation page before proceeding.
+        """
+        from django.template.response import TemplateResponse
+
+        if request.POST.get("post"):
+            # Process the retry
+            count = 0
+            for obj in queryset:
+                dispatch_webhook.delay(obj.subscription_id, obj.event_id)
+                count += 1
+
+            self.message_user(
+                request,
+                f"Successfully requeued {count} webhook delivery/deliveries.",
+                messages.SUCCESS,
+            )
+            return None
+
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "Are you sure?",
+            "queryset": queryset,
+            "opts": self.model._meta,
+            "action_checkbox_name": ACTION_CHECKBOX_NAME,
+            "media": self.media,
+        }
+
+        return TemplateResponse(
+            request,
+            "admin/ingest/webhookdeliverylog/webhook_retry_confirmation.html",
+            context,
+        )
+
+    actions = ["retry_webhook_delivery"]
+
+
+@admin.register(WebhookDeadLetter)
+class WebhookDeadLetterAdmin(AdminAuditMixin, admin.ModelAdmin):
+    """Manual review queue for webhook deliveries that exhausted retries."""
+
+    list_display = [
+        "id",
+        "subscription",
+        "status_code",
+        "retries_exhausted",
+        "resolved",
+        "created_at",
+    ]
+    list_filter = ["resolved", "created_at", "status_code"]
+    search_fields = ["subscription__target_url", "error"]
+    readonly_fields = [
+        "subscription",
+        "event",
+        "payload",
+        "status_code",
+        "error",
+        "retries_exhausted",
+        "created_at",
+    ]
+    ordering = ["-created_at"]
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +809,34 @@ class APIKeyAdmin(AdminAuditMixin, admin.ModelAdmin):
             quota = APIKey.TIER_QUOTAS.get(obj.tier, 50)
             obj.quota_per_hour = quota if quota is not None else APIKey.UNLIMITED_QUOTA
         super().save_model(request, obj, form, change)
+
+
+@admin.register(ContractDependency)
+class ContractDependencyAdmin(AdminAuditMixin, admin.ModelAdmin):
+    list_display = ["caller", "callee", "call_count", "risk_score", "last_call"]
+    list_filter = ["last_call"]
+    search_fields = ["caller__contract_id", "callee__contract_id"]
+
+
+@admin.register(CallGraph)
+class CallGraphAdmin(AdminAuditMixin, admin.ModelAdmin):
+    list_display = ["contract", "has_cycles", "computed_at"]
+    list_filter = ["has_cycles", "computed_at"]
+    readonly_fields = ["computed_at"]
+
+
+@admin.register(DependencyImpactAssessment)
+class DependencyImpactAssessmentAdmin(AdminAuditMixin, admin.ModelAdmin):
+    list_display = [
+        "root_contract",
+        "impacted_count",
+        "risk_score",
+        "impact_level",
+        "has_cycles",
+        "computed_at",
+    ]
+    list_filter = ["impact_level", "has_cycles", "computed_at"]
+    search_fields = ["root_contract__contract_id", "root_contract__name"]
 
 
 @admin.register(ContractQuota)
