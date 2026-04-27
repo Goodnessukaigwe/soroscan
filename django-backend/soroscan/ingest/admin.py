@@ -3,7 +3,7 @@ Django Admin configuration for SoroScan models.
 """
 from django import forms
 from django.contrib import admin, messages
-from django.contrib.admin.helpers import ActionForm
+from django.contrib.admin.helpers import ActionForm, ACTION_CHECKBOX_NAME
 from django.db.models import Count
 from django.http import HttpResponse
 from django.urls import path
@@ -43,7 +43,7 @@ from .models import (
     WebhookDeliveryLog,
     WebhookSubscription,
 )
-from .tasks import backfill_contract_events
+from .tasks import backfill_contract_events, dispatch_webhook
 
 
 class BackfillActionForm(ActionForm):
@@ -647,6 +647,45 @@ class WebhookDeliveryLogAdmin(AdminAuditMixin, admin.ModelAdmin):
     @admin.display(description="Success", boolean=True)
     def success_display(self, obj):
         return obj.success
+
+    @admin.action(description="Retry selected webhook deliveries")
+    def retry_webhook_delivery(self, request, queryset):
+        """
+        Manually retry selected webhook deliveries by requeueing the Celery task.
+        Shows a confirmation page before proceeding.
+        """
+        from django.template.response import TemplateResponse
+
+        if request.POST.get("post"):
+            # Process the retry
+            count = 0
+            for obj in queryset:
+                dispatch_webhook.delay(obj.subscription_id, obj.event_id)
+                count += 1
+
+            self.message_user(
+                request,
+                f"Successfully requeued {count} webhook delivery/deliveries.",
+                messages.SUCCESS,
+            )
+            return None
+
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "Are you sure?",
+            "queryset": queryset,
+            "opts": self.model._meta,
+            "action_checkbox_name": ACTION_CHECKBOX_NAME,
+            "media": self.media,
+        }
+
+        return TemplateResponse(
+            request,
+            "admin/ingest/webhookdeliverylog/webhook_retry_confirmation.html",
+            context,
+        )
+
+    actions = ["retry_webhook_delivery"]
 
 
 # ---------------------------------------------------------------------------
