@@ -1,6 +1,6 @@
 # Apollo Client Integration - Implementation Summary
 
-## Status: ✅ Complete
+## Status:  Complete
 
 Apollo Client has been successfully integrated into the SoroScan frontend to consume the Django Strawberry GraphQL endpoint.
 
