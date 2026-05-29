@@ -2,9 +2,11 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Trash2, FlaskConical, ChevronUp, ChevronDown } from "lucide-react"
+import { Trash2, FlaskConical } from "lucide-react"
 import {
   Table, TableHeader, TableBody, TableRow, TableHead, TableCell,
+  SortDirectionIndicator,
+  type SortDirection,
 } from "@/components/terminal/Table"
 import { Button } from "@/components/terminal/Button"
 import type { Webhook, WebhookStatus } from "../types"
@@ -18,7 +20,7 @@ interface WebhookTableProps {
 }
 
 type SortField = "url" | "status" | "successRate" | "lastDelivery"
-type SortDir = "asc" | "desc"
+type SortDir = SortDirection
 
 function StatusBadge({ status }: { status: WebhookStatus }) {
   const map: Record<WebhookStatus, { dot: string; label: string; text: string }> = {
@@ -45,11 +47,6 @@ function SuccessBar({ rate }: { rate: number }) {
       <span className="text-[10px]">{rate.toFixed(1)}%</span>
     </div>
   )
-}
-
-function SortIcon({ active, dir }: { field: string; active: boolean; dir: SortDir }) {
-  if (!active) return <ChevronUp size={10} className="opacity-20" />
-  return dir === "asc" ? <ChevronUp size={10} /> : <ChevronDown size={10} />
 }
 
 export function WebhookTable({ webhooks, onDelete, onTest, testingId, testResult }: WebhookTableProps) {
@@ -93,7 +90,7 @@ export function WebhookTable({ webhooks, onDelete, onTest, testingId, testResult
             >
               <span className="inline-flex items-center gap-1">
                 STATUS
-                <SortIcon field="status" active={sortField === "status"} dir={sortDir} />
+                <SortDirectionIndicator active={sortField === "status"} direction={sortDir} />
               </span>
             </TableHead>
             <TableHead
@@ -102,7 +99,7 @@ export function WebhookTable({ webhooks, onDelete, onTest, testingId, testResult
             >
               <span className="inline-flex items-center gap-1">
                 ENDPOINT_URL
-                <SortIcon field="url" active={sortField === "url"} dir={sortDir} />
+                <SortDirectionIndicator active={sortField === "url"} direction={sortDir} />
               </span>
             </TableHead>
             <TableHead className="hidden md:table-cell">EVENT_TYPES</TableHead>
@@ -112,7 +109,7 @@ export function WebhookTable({ webhooks, onDelete, onTest, testingId, testResult
             >
               <span className="inline-flex items-center gap-1">
                 SUCCESS
-                <SortIcon field="successRate" active={sortField === "successRate"} dir={sortDir} />
+                <SortDirectionIndicator active={sortField === "successRate"} direction={sortDir} />
               </span>
             </TableHead>
             <TableHead
@@ -121,7 +118,7 @@ export function WebhookTable({ webhooks, onDelete, onTest, testingId, testResult
             >
               <span className="inline-flex items-center gap-1">
                 LAST_DELIVERY
-                <SortIcon field="lastDelivery" active={sortField === "lastDelivery"} dir={sortDir} />
+                <SortDirectionIndicator active={sortField === "lastDelivery"} direction={sortDir} />
               </span>
             </TableHead>
             <TableHead>ACTIONS</TableHead>

@@ -1,11 +1,15 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from "lucide-react"
+import { ChevronLeft, ChevronRight } from "lucide-react"
 import {
   Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption,
+  SortDirectionIndicator,
+  type SortDirection,
 } from "@/components/terminal/Table"
-import type { DeliveryLog, SortField, SortDir, StatusFilter } from "../../types"
+import type { DeliveryLog, SortField, StatusFilter } from "../../types"
+
+type SortDir = SortDirection
 
 interface DeliveryLogProps {
   logs: DeliveryLog[]
@@ -124,9 +128,10 @@ export function DeliveryLog({ logs }: DeliveryLogProps) {
                   >
                     <span className="inline-flex items-center gap-1">
                       TIMESTAMP
-                      {sortField === "timestamp"
-                        ? sortDir === "asc" ? <ChevronUp size={10} /> : <ChevronDown size={10} />
-                        : <ChevronUp size={10} className="opacity-20" />}
+                      <SortDirectionIndicator
+                        active={sortField === "timestamp"}
+                        direction={sortDir}
+                      />
                     </span>
                   </TableHead>
                   <TableHead className="hidden sm:table-cell">EVENT_TYPE</TableHead>
@@ -136,9 +141,10 @@ export function DeliveryLog({ logs }: DeliveryLogProps) {
                   >
                     <span className="inline-flex items-center gap-1">
                       STATUS
-                      {sortField === "statusCode"
-                        ? sortDir === "asc" ? <ChevronUp size={10} /> : <ChevronDown size={10} />
-                        : <ChevronUp size={10} className="opacity-20" />}
+                      <SortDirectionIndicator
+                        active={sortField === "statusCode"}
+                        direction={sortDir}
+                      />
                     </span>
                   </TableHead>
                   <TableHead
@@ -147,9 +153,10 @@ export function DeliveryLog({ logs }: DeliveryLogProps) {
                   >
                     <span className="inline-flex items-center gap-1">
                       RESP_TIME
-                      {sortField === "responseTimeMs"
-                        ? sortDir === "asc" ? <ChevronUp size={10} /> : <ChevronDown size={10} />
-                        : <ChevronUp size={10} className="opacity-20" />}
+                      <SortDirectionIndicator
+                        active={sortField === "responseTimeMs"}
+                        direction={sortDir}
+                      />
                     </span>
                   </TableHead>
                   <TableHead
@@ -158,9 +165,10 @@ export function DeliveryLog({ logs }: DeliveryLogProps) {
                   >
                     <span className="inline-flex items-center gap-1">
                       ATTEMPT
-                      {sortField === "attempt"
-                        ? sortDir === "asc" ? <ChevronUp size={10} /> : <ChevronDown size={10} />
-                        : <ChevronUp size={10} className="opacity-20" />}
+                      <SortDirectionIndicator
+                        active={sortField === "attempt"}
+                        direction={sortDir}
+                      />
                     </span>
                   </TableHead>
                   <TableHead>ERROR_MSG</TableHead>
