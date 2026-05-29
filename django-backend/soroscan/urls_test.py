@@ -11,7 +11,11 @@ from django.urls import include, path
 
 from soroscan.health import health_view, readiness_view
 from soroscan.meta_views import db_pool_stats_view
-from soroscan.ingest.views import contract_status, rate_limit_analytics_view
+from soroscan.ingest.views import (
+    contract_status,
+    rate_limit_analytics_view,
+    webhook_batch_delivery_status_view,
+)
 from soroscan.dev_summary_view import dev_summary_view
 
 
@@ -35,6 +39,11 @@ urlpatterns = [
     path("api/analytics/rate-limits/", rate_limit_analytics_view, name="rate-limit-analytics"),
     path("api/meta/db-pool/", db_pool_stats_view, name="db-pool-stats"),
     path("api/dev/summary/", dev_summary_view, name="dev-summary"),
+    path(
+        "api/webhooks/deliveries/batch-status/",
+        webhook_batch_delivery_status_view,
+        name="webhook-batch-delivery-status",
+    ),
     path("api/ingest/", include("soroscan.ingest.urls")),
 ]
 
