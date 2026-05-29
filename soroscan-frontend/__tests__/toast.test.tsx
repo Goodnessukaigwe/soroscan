@@ -98,6 +98,29 @@ describe("Toast System", () => {
     expect(toasts.length).toBe(2);
   });
 
+  it.each([
+    ["success", "status"],
+    ["error", "alert"],
+    ["info", "status"],
+    ["warning", "status"],
+  ] as const)(
+    "renders %s toast with correct accessibility role",
+    (type, role) => {
+      render(
+        <ToastProvider>
+          <div />
+        </ToastProvider>,
+      );
+
+      act(() => {
+        showToast(`${type} message`, type, `${type} title`);
+      });
+
+      expect(screen.getByText(`${type} title`)).toBeInTheDocument();
+      expect(screen.getByRole(role)).toBeInTheDocument();
+    },
+  );
+
   it("works with global showToast helper", () => {
     render(
       <ToastProvider>
