@@ -42,6 +42,7 @@ from .models import (
     Team,
     TeamMembership,
     TrackedContract,
+    WebhookDeliveryLog,
     WebhookSubscription,
 )
 from .cache_utils import get_cached_contract
@@ -1439,6 +1440,79 @@ def compliance_export_view(request):
     )
     response["Content-Disposition"] = 'attachment; filename="compliance_audit.csv"'
     return response
+
+
+# ---------------------------------------------------------------------------
+# Issue #472: Failed webhook delivery logs
+# ---------------------------------------------------------------------------
+
+@extend_schema(
+    parameters=[
+        inline_serializer(
+            name="WebhookFailuresParams",
+            fields={
+                "subscription_id": serializers.IntegerField(required=False),
+            },
+        )
+    ],
+    responses={
+        200: inline_serializer(
+            name="WebhookFailuresResponse",
+            fields={
+                "results": serializers.ListField(
+                    child=inline_serializer(
+                        name="WebhookFailureEntry",
+                        fields={
+                            "id": serializers.IntegerField(),
+                            "subscription_id": serializers.IntegerField(),
+                            "url": serializers.CharField(),
+                            "error_message": serializers.CharField(),
+                            "http_status_code": serializers.IntegerField(allow_null=True),
+                            "timestamp": serializers.DateTimeField(),
+                        },
+                    )
+                ),
+            },
+        )
+    },
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def webhook_failures_view(request):
+    """
+    GET /api/webhooks/failures/
+
+    Return the last 50 failed webhook delivery attempts. Optionally filter by
+    subscription_id query parameter.
+    """
+    qs = (
+        WebhookDeliveryLog.objects.filter(success=False)
+        .select_related("subscription")
+        .order_by("-timestamp")
+    )
+
+    subscription_id = request.query_params.get("subscription_id")
+    if subscription_id is not None:
+        if not str(subscription_id).isdigit():
+            return Response(
+                {"detail": "subscription_id must be a positive integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        qs = qs.filter(subscription_id=int(subscription_id))
+
+    logs = qs[:50]
+    results = [
+        {
+            "id": log.id,
+            "subscription_id": log.subscription_id,
+            "url": log.subscription.target_url,
+            "error_message": log.error,
+            "http_status_code": log.status_code,
+            "timestamp": log.timestamp,
+        }
+        for log in logs
+    ]
+    return Response({"results": results})
 
 
 # ---------------------------------------------------------------------------
