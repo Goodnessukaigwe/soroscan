@@ -42,6 +42,7 @@ from .models import (
     Team,
     TeamMembership,
     TrackedContract,
+    WebhookDeliveryLog,
     WebhookSubscription,
 )
 from .cache_utils import get_cached_contract
@@ -1439,6 +1440,121 @@ def compliance_export_view(request):
     )
     response["Content-Disposition"] = 'attachment; filename="compliance_audit.csv"'
     return response
+
+
+# ---------------------------------------------------------------------------
+# Issue #592: Batch webhook delivery status
+# ---------------------------------------------------------------------------
+
+@extend_schema(
+    request=inline_serializer(
+        name="WebhookBatchStatusRequest",
+        fields={
+            "delivery_ids": serializers.ListField(
+                child=serializers.IntegerField(),
+                help_text="WebhookDeliveryLog primary keys to look up",
+            ),
+        },
+    ),
+    responses={
+        200: inline_serializer(
+            name="WebhookBatchStatusResponse",
+            fields={
+                "deliveries": serializers.ListField(
+                    child=inline_serializer(
+                        name="WebhookDeliveryStatusEntry",
+                        fields={
+                            "id": serializers.IntegerField(),
+                            "subscription_id": serializers.IntegerField(allow_null=True),
+                            "success": serializers.BooleanField(allow_null=True),
+                            "http_status_code": serializers.IntegerField(allow_null=True),
+                            "status": serializers.CharField(),
+                            "attempt_number": serializers.IntegerField(allow_null=True),
+                            "timestamp": serializers.DateTimeField(allow_null=True),
+                        },
+                    )
+                ),
+            },
+        ),
+        400: inline_serializer(
+            name="WebhookBatchStatusBadRequest",
+            fields={"detail": serializers.CharField()},
+        ),
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def webhook_batch_delivery_status_view(request):
+    """
+    POST /api/webhooks/deliveries/batch-status/
+
+    Look up delivery status for multiple WebhookDeliveryLog records in one query.
+    """
+    delivery_ids = request.data.get("delivery_ids")
+    if not isinstance(delivery_ids, list) or not delivery_ids:
+        return Response(
+            {"detail": "delivery_ids must be a non-empty list of integers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        parsed_ids = [int(delivery_id) for delivery_id in delivery_ids]
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "delivery_ids must contain only integers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if len(parsed_ids) > 200:
+        return Response(
+            {"detail": "delivery_ids may contain at most 200 ids."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    logs = (
+        WebhookDeliveryLog.objects.filter(pk__in=parsed_ids)
+        .only(
+            "id",
+            "subscription_id",
+            "success",
+            "status_code",
+            "attempt_number",
+            "timestamp",
+        )
+        .order_by("id")
+    )
+    by_id = {log.id: log for log in logs}
+
+    deliveries = []
+    for delivery_id in parsed_ids:
+        log = by_id.get(delivery_id)
+        if log is None:
+            deliveries.append(
+                {
+                    "id": delivery_id,
+                    "subscription_id": None,
+                    "success": None,
+                    "http_status_code": None,
+                    "status": "not_found",
+                    "attempt_number": None,
+                    "timestamp": None,
+                }
+            )
+            continue
+
+        deliveries.append(
+            {
+                "id": log.id,
+                "subscription_id": log.subscription_id,
+                "success": log.success,
+                "http_status_code": log.status_code,
+                "status": "success" if log.success else "failed",
+                "attempt_number": log.attempt_number,
+                "timestamp": log.timestamp,
+            }
+        )
+
+    return Response({"deliveries": deliveries})
 
 
 # ---------------------------------------------------------------------------
