@@ -461,6 +461,12 @@ GRAPHQL_N1_DETECTION_ENABLED = env.bool(
     default=DEBUG,
 )
 
+# GraphQL trusted query whitelist (issue #783)
+GRAPHQL_QUERY_WHITELIST_ENABLED = env.bool(
+    "GRAPHQL_QUERY_WHITELIST_ENABLED",
+    default=not DEBUG,
+)
+
 # Ed25519 seed (32 bytes hex) for webhook X-Signature headers.
 WEBHOOK_ED25519_SIGNING_SEED = env("WEBHOOK_ED25519_SIGNING_SEED", default="")
 

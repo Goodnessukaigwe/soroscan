@@ -2165,3 +2165,78 @@ def cache_stats_view(request):
         "default_ttl": getattr(settings, "QUERY_CACHE_TTL_SECONDS", 60),
         "status": "ok",
     })
+
+
+@extend_schema(
+    request=inline_serializer(
+        name="GraphQLWhitelistRegisterRequest",
+        fields={
+            "query": serializers.CharField(),
+            "name": serializers.CharField(required=False),
+            "description": serializers.CharField(required=False),
+        },
+    ),
+    responses=inline_serializer(
+        name="GraphQLWhitelistRegisterResponse",
+        fields={
+            "query_hash": serializers.CharField(),
+            "created": serializers.BooleanField(),
+            "name": serializers.CharField(),
+        },
+    ),
+)
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def admin_graphql_whitelist_view(request):
+    """List or register trusted GraphQL queries by hash (staff only)."""
+    from soroscan.graphql_whitelist import hash_graphql_query
+    from soroscan.ingest.models import GraphQLWhitelistedQuery
+
+    if not request.user.is_staff:
+        return Response({"error": "Admin access required"}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == "GET":
+        rows = GraphQLWhitelistedQuery.objects.order_by("-created_at")[:200]
+        return Response(
+            [
+                {
+                    "query_hash": row.query_hash,
+                    "name": row.name,
+                    "description": row.description,
+                    "created_at": row.created_at,
+                }
+                for row in rows
+            ]
+        )
+
+    query = (request.data.get("query") or "").strip()
+    if not query:
+        return Response({"error": "query is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    query_hash = hash_graphql_query(query)
+    name = (request.data.get("name") or "").strip()
+    description = (request.data.get("description") or "").strip()
+
+    row, created = GraphQLWhitelistedQuery.objects.get_or_create(
+        query_hash=query_hash,
+        defaults={
+            "query_text": query,
+            "name": name,
+            "description": description,
+            "registered_by": request.user,
+        },
+    )
+    if not created and name and not row.name:
+        row.name = name
+        row.description = description or row.description
+        row.registered_by = request.user
+        row.save(update_fields=["name", "description", "registered_by"])
+
+    return Response(
+        {
+            "query_hash": row.query_hash,
+            "created": created,
+            "name": row.name,
+        },
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )

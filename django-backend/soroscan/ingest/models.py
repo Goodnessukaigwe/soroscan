@@ -2233,3 +2233,42 @@ class BlacklistedContract(models.Model):
 
     def __str__(self):
         return f"Blacklisted({self.contract_id[:8]}...)"
+
+
+class GraphQLWhitelistedQuery(models.Model):
+    """Approved GraphQL query stored by normalized hash."""
+
+    query_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    query_text = models.TextField(help_text="Original GraphQL query document")
+    name = models.CharField(max_length=128, blank=True, default="")
+    description = models.TextField(blank=True, default="")
+    registered_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="registered_graphql_queries",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        label = self.name or self.query_hash[:12]
+        return f"GraphQL query: {label}"
+
+
+class GraphQLRejectedQueryLog(models.Model):
+    """Audit log for GraphQL queries rejected by the production whitelist."""
+
+    query_hash = models.CharField(max_length=64, db_index=True)
+    query_preview = models.TextField(blank=True, default="")
+    client_ip = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Rejected GraphQL hash {self.query_hash[:12]}..."

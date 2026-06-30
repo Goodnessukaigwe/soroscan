@@ -1,7 +1,9 @@
 """
 Custom GraphQL views with rate limiting and introspection control.
 """
+
 import json
+import logging
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -10,7 +12,10 @@ from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from strawberry.django.views import GraphQLView
 
 from soroscan.graphql_complexity import calculate_complexity, complexity_error_message
+from soroscan.graphql_whitelist import hash_graphql_query, normalize_graphql_query
 from soroscan.throttles import IngestRateThrottle
+
+logger = logging.getLogger(__name__)
 
 _INTROSPECTION_FIELDS = {"__schema", "__type", "__typename"}
 
@@ -27,6 +32,57 @@ def _is_introspection_query(body: bytes) -> bool:
     """Return True if the request body contains a GraphQL introspection query."""
     query = _parse_request_body(body).get("query", "")
     return any(field in query for field in _INTROSPECTION_FIELDS)
+
+
+def _client_ip(request) -> str | None:
+    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    if forwarded:
+        first = forwarded.split(",", maxsplit=1)[0].strip()
+        if first:
+            return first
+    return request.META.get("REMOTE_ADDR")
+
+
+def _check_query_whitelist(body: bytes, request) -> JsonResponse | None:
+    """Reject unknown queries when production whitelist enforcement is enabled."""
+    if not getattr(settings, "GRAPHQL_QUERY_WHITELIST_ENABLED", False):
+        return None
+
+    query = _parse_request_body(body).get("query", "")
+    if not query:
+        return None
+
+    from soroscan.ingest.models import GraphQLRejectedQueryLog, GraphQLWhitelistedQuery
+
+    query_hash = hash_graphql_query(query)
+    if GraphQLWhitelistedQuery.objects.filter(query_hash=query_hash).exists():
+        return None
+
+    GraphQLRejectedQueryLog.objects.create(
+        query_hash=query_hash,
+        query_preview=normalize_graphql_query(query)[:500],
+        client_ip=_client_ip(request),
+    )
+    logger.warning(
+        "Rejected unknown GraphQL query hash=%s ip=%s",
+        query_hash,
+        _client_ip(request),
+    )
+
+    return JsonResponse(
+        {
+            "errors": [
+                {
+                    "message": (
+                        "GraphQL query is not whitelisted. "
+                        "Register the query hash via the admin endpoint."
+                    ),
+                    "extensions": {"queryHash": query_hash},
+                }
+            ]
+        },
+        status=403,
+    )
 
 
 def _evaluate_query_complexity(body: bytes):
@@ -106,6 +162,10 @@ class ThrottledGraphQLView(GraphQLView):
                     status=403,
                 )
 
+            whitelist_response = _check_query_whitelist(body, request)
+            if whitelist_response is not None:
+                return whitelist_response
+
             if complexity_result is not None and complexity_result.exceeded:
                 return JsonResponse(
                     {
@@ -126,8 +186,6 @@ class ThrottledGraphQLView(GraphQLView):
 
         if complexity_result is not None and hasattr(response, "__setitem__"):
             response["X-GraphQL-Complexity"] = str(complexity_result.score)
-            response["X-GraphQL-Complexity-Limit"] = str(
-                complexity_result.max_allowed
-            )
+            response["X-GraphQL-Complexity-Limit"] = str(complexity_result.max_allowed)
 
         return response

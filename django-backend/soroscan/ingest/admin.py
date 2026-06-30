@@ -40,6 +40,8 @@ from .models import (
     IndexerState,
     IngestError,
     EventDeduplicationConfig,
+    GraphQLRejectedQueryLog,
+    GraphQLWhitelistedQuery,
     Organization,
     OrganizationBudget,
     OrganizationCostSnapshot,
@@ -1418,3 +1420,17 @@ class EventDeduplicationConfigAdmin(AdminAuditMixin, admin.ModelAdmin):
             json.dumps({"dedup_hash": dedup_hash, "material": material}),
             content_type="application/json",
         )
+
+
+@admin.register(GraphQLWhitelistedQuery)
+class GraphQLWhitelistedQueryAdmin(admin.ModelAdmin):
+    list_display = ["name", "query_hash", "registered_by", "created_at"]
+    search_fields = ["name", "query_hash", "query_text"]
+    readonly_fields = ["query_hash", "created_at", "registered_by"]
+
+
+@admin.register(GraphQLRejectedQueryLog)
+class GraphQLRejectedQueryLogAdmin(admin.ModelAdmin):
+    list_display = ["query_hash", "client_ip", "created_at"]
+    search_fields = ["query_hash", "query_preview"]
+    readonly_fields = ["query_hash", "query_preview", "client_ip", "created_at"]

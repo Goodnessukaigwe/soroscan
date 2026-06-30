@@ -11,6 +11,7 @@ from .views import (
     TeamViewSet,
     TrackedContractViewSet,
     admin_ingest_errors_view,
+    admin_graphql_whitelist_view,
     audit_trail_view,
     compliance_export_view,
     contract_event_explorer_view,
@@ -81,6 +82,11 @@ urlpatterns = [
     path("events/restore-archive/", restore_archived_events, name="restore-archive"),
     path("audit-trail/", audit_trail_view, name="audit-trail"),
     path("admin/ingest-errors/", admin_ingest_errors_view, name="admin-ingest-errors"),
+    path(
+        "admin/graphql-whitelist/",
+        admin_graphql_whitelist_view,
+        name="admin-graphql-whitelist",
+    ),
     path(
         "admin/organization-costs/",
         organization_cost_breakdown_view,

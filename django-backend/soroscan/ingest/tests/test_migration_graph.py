@@ -3,7 +3,7 @@ Bug condition exploration test for the ingest app migration graph conflict.
 
 This test file ensures that the migration graph is consistent and has a single leaf node.
 The conflict between 0027_merge_final_leaf_nodes and 0029_contractmetadata has been resolved.
-The current leaf node is 0045_organization_cors_origins.
+The current leaf node is 0046_graphql_query_whitelist.
 
 Validates: Requirements 2.1, 2.2
 """
