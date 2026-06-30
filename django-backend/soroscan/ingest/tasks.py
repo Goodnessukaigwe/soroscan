@@ -2452,6 +2452,36 @@ def reconcile_event_completeness() -> dict[str, Any]:
     return {"contracts_checked": len(summaries), "repair_jobs": repair_jobs}
 
 
+@shared_task(name="ingest.tasks.snapshot_contract_state")
+def snapshot_contract_state() -> dict[str, int]:
+    """
+    Capture contract state snapshots for active contracts at configured intervals.
+    """
+    from soroscan.ingest.services.contract_state import (
+        create_contract_snapshot,
+        should_snapshot_contract,
+        snapshot_interval,
+    )
+    from soroscan.ingest.stellar_client import SorobanClient
+
+    client = SorobanClient()
+    interval = snapshot_interval()
+    captured = 0
+    skipped = 0
+
+    for contract in TrackedContract.objects.filter(is_active=True):
+        if not should_snapshot_contract(contract, interval):
+            skipped += 1
+            continue
+
+        ledger = contract.last_indexed_ledger
+        state = client.get_contract_state(contract.contract_id, ledger=ledger)
+        create_contract_snapshot(contract, ledger, state)
+        captured += 1
+
+    return {"captured": captured, "skipped": skipped, "interval": interval}
+
+
 @shared_task(bind=True, queue="backfill", max_retries=3, default_retry_delay=60)
 def backfill_contract_events(
     self,

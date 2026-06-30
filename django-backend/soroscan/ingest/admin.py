@@ -27,6 +27,7 @@ from .models import (
     ContractDependency,
     ContractDeployment,
     ContractEvent,
+    ContractSnapshot,
     DependencyImpactAssessment,
     ContractMetadata,
     CallGraph,
@@ -47,6 +48,7 @@ from .models import (
     PIIField,
     RemediationIncident,
     RemediationRule,
+    StateChange,
     Team,
     TeamMembership,
     TrackedContract,
@@ -290,6 +292,52 @@ class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
     def event_count(self, obj):
         """Use annotated count to avoid N+1 queries."""
         return getattr(obj, "_event_count", 0)
+
+    def get_urls(self):
+        extra = [
+            path(
+                "<path:object_id>/state-timeline/",
+                self.admin_site.admin_view(self.state_timeline_view),
+                name="ingest_trackedcontract_state_timeline",
+            ),
+        ]
+        return extra + super().get_urls()
+
+    def state_timeline_view(self, request, object_id):
+        contract = TrackedContract.objects.filter(pk=object_id).first()
+        if contract is None:
+            return HttpResponse("Contract not found", status=404)
+
+        snapshots = (
+            ContractSnapshot.objects.filter(contract=contract)
+            .prefetch_related("changes")
+            .order_by("-ledger_sequence")[:100]
+        )
+        rows = []
+        for snapshot in snapshots:
+            change_items = "".join(
+                f"<li><code>{change.change_type}</code> {change.field_name}: "
+                f"{change.old_value!r} → {change.new_value!r}</li>"
+                for change in snapshot.changes.all()
+            ) or "<li><em>No field changes recorded</em></li>"
+            rows.append(
+                f"<tr><td>{snapshot.ledger_sequence}</td>"
+                f"<td>{snapshot.captured_at.isoformat()}</td>"
+                f"<td><ul>{change_items}</ul></td></tr>"
+            )
+
+        html = (
+            "<html><head><title>State Timeline</title>"
+            "<link rel='stylesheet' type='text/css' href='/static/admin/css/base.css'></head>"
+            "<body id='django-admin'><div id='content-main'>"
+            f"<h1>State timeline: {contract.name}</h1>"
+            f"<p>Contract ID: <code>{contract.contract_id}</code></p>"
+            "<table><thead><tr><th>Ledger</th><th>Captured</th><th>Changes</th></tr></thead>"
+            f"<tbody>{''.join(rows) or '<tr><td colspan=\"3\">No snapshots yet.</td></tr>'}</tbody></table>"
+            f"<p><a href='{reverse('admin:ingest_trackedcontract_change', args=[contract.pk])}'>Back to contract</a></p>"
+            "</div></body></html>"
+        )
+        return HttpResponse(html)
 
     @admin.action(description="Backfill events")
     def backfill_events(self, request, queryset):
@@ -1418,3 +1466,40 @@ class EventDeduplicationConfigAdmin(AdminAuditMixin, admin.ModelAdmin):
             json.dumps({"dedup_hash": dedup_hash, "material": material}),
             content_type="application/json",
         )
+
+
+class StateChangeInline(admin.TabularInline):
+    model = StateChange
+    fk_name = "snapshot"
+    extra = 0
+    readonly_fields = ["field_name", "old_value", "new_value", "change_type", "created_at"]
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ContractSnapshot)
+class ContractSnapshotAdmin(admin.ModelAdmin):
+    list_display = ["contract", "ledger_sequence", "captured_at"]
+    list_filter = ["captured_at"]
+    search_fields = ["contract__contract_id", "contract__name"]
+    readonly_fields = ["contract", "ledger_sequence", "state_data", "captured_at"]
+    inlines = [StateChangeInline]
+    ordering = ["-ledger_sequence"]
+
+
+@admin.register(StateChange)
+class StateChangeAdmin(admin.ModelAdmin):
+    list_display = ["snapshot", "field_name", "change_type", "created_at"]
+    list_filter = ["change_type", "created_at"]
+    search_fields = ["field_name", "snapshot__contract__contract_id"]
+    readonly_fields = [
+        "snapshot",
+        "previous_snapshot",
+        "field_name",
+        "old_value",
+        "new_value",
+        "change_type",
+        "created_at",
+    ]

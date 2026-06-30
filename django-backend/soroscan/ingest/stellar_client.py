@@ -484,3 +484,61 @@ class SorobanClient:
                 error=str(e),
             )
 
+    def get_contract_state(
+        self,
+        contract_id: str,
+        ledger: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """
+        Fetch contract persistent storage entries from Soroban RPC.
+
+        Returns a JSON-serializable dict keyed by entry identifiers. When the
+        RPC method is unavailable or fails, returns a minimal payload so callers
+        can still persist a snapshot marker.
+        """
+        payload: dict[str, Any] = {
+            "contract_id": contract_id,
+            "ledger": ledger,
+            "entries": {},
+        }
+
+        get_entries = getattr(self.server, "get_ledger_entries", None)
+        if get_entries is None:
+            logger.warning("SorobanServer.get_ledger_entries is unavailable")
+            return payload
+
+        try:
+            self._rate_limiter.acquire()
+            response = execute_with_circuit_breaker(
+                "soroban_rpc",
+                get_entries,
+                keys=[{"contractData": {"contract": contract_id, "key": "AAAA"}}],
+            )
+        except Exception:
+            logger.exception("Failed to fetch contract state for %s", contract_id)
+            return payload
+
+        entries = getattr(response, "entries", None) or getattr(response, "result", None) or []
+        serialized: dict[str, Any] = {}
+        for index, entry in enumerate(entries):
+            key = getattr(entry, "key", None) or getattr(entry, "contractData", None)
+            val = getattr(entry, "val", None) or getattr(entry, "value", None)
+            serialized[str(key or index)] = self._serialize_ledger_entry_value(val)
+
+        payload["entries"] = serialized
+        latest_ledger = getattr(response, "latestLedger", None)
+        if latest_ledger is not None:
+            payload["ledger"] = latest_ledger
+        return payload
+
+    @staticmethod
+    def _serialize_ledger_entry_value(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (str, int, float, bool, list, dict)):
+            return value
+        if hasattr(value, "to_dict"):
+            return value.to_dict()
+        if hasattr(value, "xdr"):
+            return {"xdr": value.xdr}
+        return str(value)

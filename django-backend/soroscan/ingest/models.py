@@ -2233,3 +2233,67 @@ class BlacklistedContract(models.Model):
 
     def __str__(self):
         return f"Blacklisted({self.contract_id[:8]}...)"
+
+
+class ContractSnapshot(models.Model):
+    """Point-in-time capture of on-chain contract persistent state."""
+
+    contract = models.ForeignKey(
+        TrackedContract,
+        on_delete=models.CASCADE,
+        related_name="snapshots",
+    )
+    ledger_sequence = models.PositiveBigIntegerField(db_index=True)
+    state_data = models.JSONField(help_text="Contract state JSON at capture time")
+    captured_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-ledger_sequence"]
+        unique_together = [("contract", "ledger_sequence")]
+        indexes = [
+            models.Index(fields=["contract", "-ledger_sequence"]),
+        ]
+
+    def __str__(self):
+        return f"snapshot@{self.ledger_sequence} ({self.contract.contract_id[:8]}...)"
+
+
+class StateChange(models.Model):
+    """Field-level diff between consecutive contract snapshots."""
+
+    class ChangeType(models.TextChoices):
+        INSERT = "insert", "Insert"
+        UPDATE = "update", "Update"
+        DELETE = "delete", "Delete"
+
+    snapshot = models.ForeignKey(
+        ContractSnapshot,
+        on_delete=models.CASCADE,
+        related_name="changes",
+    )
+    previous_snapshot = models.ForeignKey(
+        ContractSnapshot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="next_changes",
+    )
+    field_name = models.CharField(max_length=512, db_index=True)
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+    change_type = models.CharField(
+        max_length=16,
+        choices=ChangeType.choices,
+        default=ChangeType.UPDATE,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["field_name", "created_at"]
+        indexes = [
+            models.Index(fields=["snapshot", "field_name"]),
+        ]
+
+    def __str__(self):
+        return f"{self.change_type} {self.field_name}"

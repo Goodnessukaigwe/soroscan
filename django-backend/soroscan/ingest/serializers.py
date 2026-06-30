@@ -12,12 +12,14 @@ from .models import (
     APIKey,
     ContractEvent,
     ContractInvocation,
+    ContractSnapshot,
     ContractSource,
     ContractVerification,
     Organization,
     OrganizationBudget,
     OrganizationCostSnapshot,
     OrganizationMembership,
+    StateChange,
     Team,
     TeamMembership,
     TrackedContract,
@@ -551,3 +553,30 @@ class ContractVerificationSerializer(serializers.ModelSerializer):
             "error_message",
         ]
         read_only_fields = ["id", "verified_at"]
+
+
+class StateChangeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StateChange
+        fields = [
+            "id",
+            "field_name",
+            "old_value",
+            "new_value",
+            "change_type",
+            "created_at",
+        ]
+
+
+class ContractSnapshotSerializer(serializers.ModelSerializer):
+    changes = StateChangeSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ContractSnapshot
+        fields = [
+            "id",
+            "ledger_sequence",
+            "state_data",
+            "captured_at",
+            "changes",
+        ]

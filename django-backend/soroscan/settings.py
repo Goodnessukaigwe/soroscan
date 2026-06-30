@@ -371,6 +371,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "ingest.tasks.warm_event_count_cache",
         "schedule": 300,  # every 5 minutes
     },
+    "snapshot-contract-state": {
+        "task": "ingest.tasks.snapshot_contract_state",
+        "schedule": 600,  # every 10 minutes
+    },
 }
 
 # Data Retention Configuration
@@ -460,6 +464,10 @@ GRAPHQL_N1_DETECTION_ENABLED = env.bool(
     "GRAPHQL_N1_DETECTION_ENABLED",
     default=DEBUG,
 )
+
+# Contract state snapshot capture (issue #798)
+CONTRACT_SNAPSHOT_INTERVAL = env.int("CONTRACT_SNAPSHOT_INTERVAL", default=1000)
+CONTRACT_SNAPSHOT_MAX_BYTES = env.int("CONTRACT_SNAPSHOT_MAX_BYTES", default=1_048_576)
 
 # Ed25519 seed (32 bytes hex) for webhook X-Signature headers.
 WEBHOOK_ED25519_SIGNING_SEED = env("WEBHOOK_ED25519_SIGNING_SEED", default="")

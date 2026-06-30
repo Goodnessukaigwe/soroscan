@@ -35,6 +35,7 @@ from .models import (
     ArchivedEventBatch,
     ContractEvent,
     ContractInvocation,
+    ContractSnapshot,
     ContractSource,
     ContractVerification,
     Organization,
@@ -54,6 +55,7 @@ from .serializers import (
     APIKeySerializer,
     ContractEventSerializer,
     ContractInvocationSerializer,
+    ContractSnapshotSerializer,
     ContractSourceSerializer,
     ContractVerificationSerializer,
     EventSearchSerializer,
@@ -252,6 +254,23 @@ class TrackedContractViewSet(viewsets.ModelViewSet):
         from .tasks import _calculate_completeness
 
         return Response(_calculate_completeness(contract))
+
+    @extend_schema(responses=ContractSnapshotSerializer(many=True))
+    @action(detail=True, methods=["get"], url_path="snapshots")
+    def snapshots(self, request, pk=None):
+        """List contract state snapshots, optionally filtered by ledger range."""
+        contract = self.get_object()
+        qs = ContractSnapshot.objects.filter(contract=contract).prefetch_related("changes")
+
+        ledger_min = request.query_params.get("ledger_min")
+        ledger_max = request.query_params.get("ledger_max")
+        if ledger_min is not None:
+            qs = qs.filter(ledger_sequence__gte=int(ledger_min))
+        if ledger_max is not None:
+            qs = qs.filter(ledger_sequence__lte=int(ledger_max))
+
+        serializer = ContractSnapshotSerializer(qs.order_by("-ledger_sequence"), many=True)
+        return Response(serializer.data)
 
     @action(detail=False, methods=["get"])
     def completeness_dashboard(self, request):
