@@ -400,3 +400,22 @@ def import_parquet(path: str, result: ImportResult, dry_run: bool = False) -> Im
         dicts = [{k: (rows[k][i] if rows[k][i] is not None else None) for k in rows} for i in range(n)]
         _import_batch(dicts, contracts, result, dry_run)
     return result
+
+
+def import_avro(path: str, result: ImportResult, dry_run: bool = False) -> ImportResult:
+    try:
+        import fastavro
+    except ImportError:
+        raise ImportError("fastavro is required for Avro import: pip install fastavro")
+
+    contracts: dict[str, TrackedContract] = {}
+    batch: list[dict] = []
+    with open(path, "rb") as src:
+        for record in fastavro.reader(src):
+            batch.append(dict(record))
+            if len(batch) >= CHUNK_SIZE:
+                _import_batch(batch, contracts, result, dry_run)
+                batch = []
+    if batch:
+        _import_batch(batch, contracts, result, dry_run)
+    return result

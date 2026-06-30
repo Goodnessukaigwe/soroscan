@@ -14,6 +14,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from soroscan.ingest.services.export_import import (
     ImportResult,
+    import_avro,
     import_csv,
     import_json,
     import_parquet,
@@ -27,7 +28,7 @@ class Command(BaseCommand):
         parser.add_argument("--file", required=True, help="Input file path")
         parser.add_argument(
             "--format",
-            choices=["parquet", "csv", "json"],
+            choices=["parquet", "csv", "json", "avro"],
             default=None,
             help="Input format (auto-detected from extension if omitted)",
         )
@@ -95,6 +96,8 @@ class Command(BaseCommand):
                 return import_csv(f, result, dry_run=dry_run)
         elif fmt == "parquet":
             return import_parquet(path, result, dry_run=dry_run)
+        elif fmt == "avro":
+            return import_avro(path, result, dry_run=dry_run)
         raise CommandError(f"Unknown format: {fmt}")
 
     @staticmethod
@@ -106,4 +109,6 @@ class Command(BaseCommand):
             return "csv"
         if lower.endswith(".parquet"):
             return "parquet"
+        if lower.endswith(".avro"):
+            return "avro"
         return None
