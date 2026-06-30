@@ -10,6 +10,7 @@ Usage examples:
     python manage.py import_events --file events.json --format json
     python manage.py import_events --file events.parquet --format parquet --dry-run
 """
+
 from django.core.management.base import BaseCommand, CommandError
 
 from soroscan.ingest.services.export_import import (
@@ -74,9 +75,7 @@ class Command(BaseCommand):
 
         if result.errors:
             self.stderr.write(
-                self.style.WARNING(
-                    f"{result.errors} row(s) skipped due to errors:"
-                )
+                self.style.WARNING(f"{result.errors} row(s) skipped due to errors:")
             )
             for detail in result.error_details[:20]:
                 self.stderr.write(f"  - {detail}")

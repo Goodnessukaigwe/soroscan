@@ -2,6 +2,7 @@
 Tests for export_events / import_events management commands and the
 underlying export_import service.
 """
+
 import csv
 import io
 import json
@@ -30,6 +31,7 @@ class TestExportJSON:
 
         buf = io.StringIO()
         from soroscan.ingest.services.export_import import export_json
+
         count = export_json(contract.contract_id, buf)
 
         assert count == 3
@@ -150,22 +152,26 @@ class TestImportJSON:
         assert ContractEvent.objects.count() == 3
 
     def test_import_missing_contract_records_error(self):
-        bad_row = json.dumps([{
-            "contract_id": "CNON_EXISTENT",
-            "event_type": "test",
-            "payload": "{}",
-            "payload_hash": "abc",
-            "ledger": 1,
-            "event_index": 0,
-            "timestamp": "2024-01-01T00:00:00+00:00",
-            "tx_hash": "deadbeef",
-            "raw_xdr": "",
-            "schema_version": None,
-            "validation_status": "passed",
-            "decoded_payload": None,
-            "decoding_status": "no_abi",
-            "signature_status": "missing",
-        }])
+        bad_row = json.dumps(
+            [
+                {
+                    "contract_id": "CNON_EXISTENT",
+                    "event_type": "test",
+                    "payload": "{}",
+                    "payload_hash": "abc",
+                    "ledger": 1,
+                    "event_index": 0,
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "tx_hash": "deadbeef",
+                    "raw_xdr": "",
+                    "schema_version": None,
+                    "validation_status": "passed",
+                    "decoded_payload": None,
+                    "decoding_status": "no_abi",
+                    "signature_status": "missing",
+                }
+            ]
+        )
         result = import_json(io.StringIO(bad_row), ImportResult())
         assert result.errors == 1
         assert result.imported == 0
