@@ -326,6 +326,11 @@ class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
                 f"<td><ul>{change_items}</ul></td></tr>"
             )
 
+        body_rows = (
+            "".join(rows)
+            if rows
+            else "<tr><td colspan='3'>No snapshots yet.</td></tr>"
+        )
         html = (
             "<html><head><title>State Timeline</title>"
             "<link rel='stylesheet' type='text/css' href='/static/admin/css/base.css'></head>"
@@ -333,7 +338,7 @@ class TrackedContractAdmin(AdminAuditMixin, admin.ModelAdmin):
             f"<h1>State timeline: {contract.name}</h1>"
             f"<p>Contract ID: <code>{contract.contract_id}</code></p>"
             "<table><thead><tr><th>Ledger</th><th>Captured</th><th>Changes</th></tr></thead>"
-            f"<tbody>{''.join(rows) or '<tr><td colspan=\"3\">No snapshots yet.</td></tr>'}</tbody></table>"
+            f"<tbody>{body_rows}</tbody></table>"
             f"<p><a href='{reverse('admin:ingest_trackedcontract_change', args=[contract.pk])}'>Back to contract</a></p>"
             "</div></body></html>"
         )
