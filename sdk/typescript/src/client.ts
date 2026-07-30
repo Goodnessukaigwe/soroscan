@@ -8,6 +8,8 @@ import type {
   GetEventsByContractsResponse,
   RecordStructuredEventParams,
   RecordStructuredEventResponse,
+  RetractStructuredEventParams,
+  RetractStructuredEventResponse,
   GetContractsParams,
   GetContractsResponse,
   GetContractParams,
@@ -215,6 +217,43 @@ export class SoroScanClient {
         payload_hash: params.payloadHash,
         schema_version: params.schemaVersion,
         correlation_id: params.correlationId,
+      },
+    });
+    return {
+      status: response.status,
+      txHash: response.tx_hash,
+      transactionStatus: response.transaction_status,
+      error: response.error,
+    };
+  }
+
+  /**
+   * Retract (soft-revoke) a previously recorded SC-38 structured event (SC-37).
+   *
+   * The original on-chain event is preserved; retraction records that the
+   * event should be treated as revoked by off-chain consumers (e.g. after a
+   * chain reorg or a data-quality issue). Only the indexer that originally
+   * recorded the event, or the contract admin, can retract it — the contract
+   * enforces this on-chain.
+   *
+   * @example
+   * const result = await client.retractStructuredEvent({
+   *   correlationId: 'b'.repeat(64),
+   *   reason: 'reorg',
+   * });
+   */
+  async retractStructuredEvent(
+    params: RetractStructuredEventParams
+  ): Promise<RetractStructuredEventResponse> {
+    const response = await this.#request<{
+      status: "submitted" | "failed";
+      tx_hash?: string;
+      transaction_status: string;
+      error?: string;
+    }>("POST", "/api/record/retract/", {
+      body: {
+        correlation_id: params.correlationId,
+        reason: params.reason ?? "unspecified",
       },
     });
     return {

@@ -295,6 +295,59 @@ class SorobanClient:
             logger.exception("Failed to record SC-38 structured event")
             return TransactionResult(False, "", "error", error=str(e))
 
+    def retract_structured_event(
+        self,
+        correlation_id_hex: str,
+        reason: str = "unspecified",
+    ) -> TransactionResult:
+        """Submit the SC-37 retraction invocation for an SC-38 structured event.
+
+        Retraction is authorized on-chain: only the original submitting
+        indexer or the contract admin may retract, so this call always signs
+        with the configured indexer keypair.
+        """
+        if not self.keypair:
+            return TransactionResult(False, "", "error", error="No keypair configured")
+
+        try:
+            correlation_id = bytes.fromhex(correlation_id_hex)
+            if len(correlation_id) != 32:
+                raise ValueError("Correlation ID must be 32 bytes")
+            account = self.server.load_account(self.keypair.public_key)
+            tx = (
+                TransactionBuilder(
+                    source_account=account,
+                    network_passphrase=self.network_passphrase,
+                    base_fee=100000,
+                )
+                .append_invoke_contract_function_op(
+                    contract_id=self.contract_id,
+                    function_name="retract_structured_event",
+                    parameters=[
+                        self._address_to_sc_val(self.keypair.public_key),
+                        self._bytes_to_sc_val(correlation_id),
+                        self._symbol_to_sc_val(reason),
+                    ],
+                )
+                .set_timeout(30)
+                .build()
+            )
+            simulation = self.server.simulate_transaction(tx)
+            if simulation.error:
+                return TransactionResult(False, "", "simulation_failed", error=simulation.error)
+            prepared = self.server.prepare_transaction(tx, simulation)
+            prepared.sign(self.keypair)
+            response = self.server.send_transaction(prepared)
+            return TransactionResult(
+                success=response.status == "PENDING",
+                tx_hash=response.hash,
+                status=response.status,
+                result_xdr=getattr(response, "result_xdr", None),
+            )
+        except Exception as e:
+            logger.exception("Failed to retract SC-37 structured event")
+            return TransactionResult(False, "", "error", error=str(e))
+
     def get_total_events(self) -> Optional[int]:
         """
         Query the total_events function on the contract.

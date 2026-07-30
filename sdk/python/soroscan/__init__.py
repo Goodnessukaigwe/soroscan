@@ -29,6 +29,8 @@ from soroscan.models import (
     PaginatedResponse,
     RecordEventsBatchRequest,
     RecordEventsBatchResponse,
+    RetractStructuredEventRequest,
+    RetractStructuredEventResponse,
     TrackedContract,
     WebhookSubscription,
 )
@@ -52,6 +54,8 @@ __all__ = [
     "EventEntry",
     "RecordEventsBatchRequest",
     "RecordEventsBatchResponse",
+    "RetractStructuredEventRequest",
+    "RetractStructuredEventResponse",
     "SoroScanError",
     "SoroScanAPIError",
     "SoroScanAuthError",

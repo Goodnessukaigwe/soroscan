@@ -139,6 +139,29 @@ export interface RecordStructuredEventResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SC-37: Structured event retraction
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Input to retract (soft-revoke) a previously recorded SC-38 structured
+ * event. Retraction preserves the original on-chain event; it only records
+ * that the event identified by `correlationId` should be treated as revoked.
+ */
+export interface RetractStructuredEventParams {
+  /** 64-character hex correlation ID of the structured event to retract */
+  correlationId: string;
+  /** Short reason code for the retraction (e.g. "reorg", "bad_data") */
+  reason?: string;
+}
+
+export interface RetractStructuredEventResponse {
+  status: "submitted" | "failed";
+  txHash?: string;
+  transactionStatus: string;
+  error?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Contracts
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -51,6 +51,29 @@ stored and rejects retries that would otherwise publish a duplicate event.
 The Python and TypeScript SDKs expose this as `record_structured_event` and
 `recordStructuredEvent`; both submit to `POST /api/record/structured/`.
 
+## SC-37 structured event retraction
+
+`retract_structured_event` lets an indexer soft-revoke a structured event it
+previously recorded via `record_structured_event`, without deleting the
+original record or freeing up its `correlation_id` for reuse. This is useful
+when a chain reorg invalidates an event or an indexer discovers it submitted
+bad data, and off-chain consumers need a signal to hide or annotate the event
+while preserving audit history and idempotency guarantees.
+
+- Only the original submitting indexer, or the contract admin, may call
+  `retract_structured_event` for a given `correlation_id`.
+- Retracting an unknown `correlation_id` fails with `StructuredEventNotFound`.
+- Retracting an already-retracted event fails with `AlreadyRetracted`.
+- `structured_by_correlation` continues to return the original event
+  unchanged after retraction.
+- `is_structured_event_retracted` and `get_retraction` let callers check
+  retraction status and inspect who retracted an event, when, and why.
+
+The Python and TypeScript SDKs expose this as `retract_structured_event` and
+`retractStructuredEvent`; both submit to `POST /api/record/retract/`. The
+Python SDK also exposes a `soroscan retract-event <correlation_id>` CLI
+command.
+
 ## Deploying to Testnet
 
 ```bash

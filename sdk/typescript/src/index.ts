@@ -23,6 +23,9 @@ export type {
   GetEventsByContractsResponse,
   RecordStructuredEventParams,
   RecordStructuredEventResponse,
+  // SC-37: Structured event retraction
+  RetractStructuredEventParams,
+  RetractStructuredEventResponse,
   // Contracts
   ContractType,
   ContractSpec,

@@ -27,6 +27,8 @@ from soroscan.models import (
     RecordEventResponse,
     RecordEventsBatchRequest,
     RecordEventsBatchResponse,
+    RetractStructuredEventRequest,
+    RetractStructuredEventResponse,
     TrackedContract,
     WebhookSubscription,
 )
@@ -435,6 +437,35 @@ class SoroScanClient:
         )
         data = self._handle_response(response)
         return RecordEventsBatchResponse.model_validate(data)
+
+    def retract_structured_event(
+        self,
+        correlation_id: str,
+        reason: str = "unspecified",
+    ) -> RetractStructuredEventResponse:
+        """
+        Retract (soft-revoke) a previously recorded SC-38 structured event (SC-37).
+
+        The original on-chain event is preserved; retraction records that the
+        event identified by ``correlation_id`` should be treated as revoked by
+        off-chain consumers (e.g. after a chain reorg or a data-quality issue).
+        Only the indexer that originally recorded the event, or the contract
+        admin, can retract it — the contract enforces this on-chain.
+
+        Args:
+            correlation_id: 64-character hex correlation ID of the structured event
+            reason: Short reason code for the retraction (e.g. "reorg", "bad_data")
+
+        Returns:
+            Submission result
+        """
+        url = urljoin(self.base_url, "/api/record/retract/")
+        request = RetractStructuredEventRequest(correlation_id=correlation_id, reason=reason)
+        response = self._client.post(
+            url, headers=self._get_headers(), json=request.model_dump()
+        )
+        data = self._handle_response(response)
+        return RetractStructuredEventResponse.model_validate(data)
 
     def get_webhooks(
         self,
@@ -959,6 +990,24 @@ class AsyncSoroScanClient:
         )
         data = self._handle_response(response)
         return RecordEventsBatchResponse.model_validate(data)
+
+    async def retract_structured_event(
+        self,
+        correlation_id: str,
+        reason: str = "unspecified",
+    ) -> RetractStructuredEventResponse:
+        """
+        Retract (soft-revoke) a previously recorded SC-38 structured event (SC-37).
+
+        See :meth:`SoroScanClient.retract_structured_event` for details.
+        """
+        url = urljoin(self.base_url, "/api/record/retract/")
+        request = RetractStructuredEventRequest(correlation_id=correlation_id, reason=reason)
+        response = await self._client.post(
+            url, headers=self._get_headers(), json=request.model_dump()
+        )
+        data = self._handle_response(response)
+        return RetractStructuredEventResponse.model_validate(data)
 
     async def get_webhooks(
         self,

@@ -15,6 +15,31 @@ client.record_structured_event(contract_id, "transfer", payload_hash, 1, correla
 await client.recordStructuredEvent({ contractId, eventType: "transfer", payloadHash, schemaVersion: 1, correlationId });
 ```
 
+## SC-37 structured event retraction
+
+SC-37 lets the indexer that originally recorded an SC-38 structured event (or
+the contract admin) retract it after the fact — for example after a chain
+reorg or a data-quality issue. Retraction does not delete the original
+on-chain event or its correlation ID; it stores retraction metadata and emits
+a `retracted` contract event so off-chain consumers can flag or hide it while
+preserving history and idempotency.
+
+```python
+client.retract_structured_event(correlation_id, reason="reorg")
+```
+
+```ts
+await client.retractStructuredEvent({ correlationId, reason: "reorg" });
+```
+
+```bash
+soroscan retract-event <correlation_id> --reason reorg
+```
+
+Retraction is authorized on-chain: only the original submitting indexer or
+the admin may retract a given correlation ID, and retracting the same event
+twice fails with `AlreadyRetracted`.
+
 Official SDKs for the SoroScan API - Stellar/Soroban event indexing.
 
 ## Strict type verification

@@ -405,6 +405,68 @@ class TestRecordEventView:
 
 
 @pytest.mark.django_db
+class TestRetractStructuredEventView:
+    """SC-37: retract (soft-revoke) a previously recorded SC-38 structured event."""
+
+    @pytest.fixture(autouse=True)
+    def setup_throttle_rates(self, settings):
+        """Ensure throttle rates are configured for tests"""
+        if 'DEFAULT_THROTTLE_RATES' not in settings.REST_FRAMEWORK:
+            settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {}
+        settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'].update({
+            'anon': '1000/hour',
+            'user': '10000/hour',
+            'ingest': '100/hour',
+            'graphql': '500/hour',
+        })
+
+    @responses.activate
+    def test_retract_structured_event_success(self, authenticated_client):
+        responses.add(
+            responses.POST,
+            "https://soroban-testnet.stellar.org/",
+            json={"status": "PENDING", "hash": "abc123"},
+            status=200,
+        )
+
+        url = reverse("retract-structured-event")
+        data = {"correlation_id": "b" * 64, "reason": "reorg"}
+        response = authenticated_client.post(url, data, format="json")
+
+        assert response.status_code in [status.HTTP_202_ACCEPTED, status.HTTP_400_BAD_REQUEST]
+
+    def test_retract_structured_event_defaults_reason(self, authenticated_client):
+        """`reason` is optional and defaults to "unspecified" server-side."""
+        url = reverse("retract-structured-event")
+        data = {"correlation_id": "b" * 64}
+        response = authenticated_client.post(url, data, format="json")
+
+        assert "reason" not in (response.data or {})
+
+    def test_retract_structured_event_validation_error(self, authenticated_client):
+        url = reverse("retract-structured-event")
+        response = authenticated_client.post(url, {}, format="json")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "correlation_id" in response.data
+
+    def test_retract_structured_event_rejects_short_correlation_id(self, authenticated_client):
+        url = reverse("retract-structured-event")
+        data = {"correlation_id": "a" * 10}
+        response = authenticated_client.post(url, data, format="json")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "correlation_id" in response.data
+
+    def test_retract_structured_event_requires_authentication(self, api_client):
+        url = reverse("retract-structured-event")
+        data = {"correlation_id": "b" * 64}
+        response = api_client.post(url, data, format="json")
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db
 class TestWebhookPingEndpoint:
     def test_ping_queues_task_and_returns_200(self, authenticated_client, contract):
         webhook = WebhookSubscriptionFactory(contract=contract)

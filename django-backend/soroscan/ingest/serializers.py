@@ -578,6 +578,27 @@ class StructuredEventRequestSerializer(RecordEventRequestSerializer):
     )
 
 
+class RetractStructuredEventRequestSerializer(serializers.Serializer):
+    """SC-37 request payload to retract (soft-revoke) an SC-38 structured event.
+
+    Retraction does not delete the original on-chain event; it flags it via a
+    ``retracted`` contract event so off-chain consumers can hide/annotate it
+    while preserving history and correlation-based deduplication.
+    """
+
+    correlation_id = serializers.CharField(
+        max_length=64,
+        min_length=64,
+        help_text="64-character hexadecimal correlation ID of the structured event to retract",
+    )
+    reason = serializers.CharField(
+        max_length=32,
+        required=False,
+        default="unspecified",
+        help_text="Short reason code for the retraction (e.g. 'reorg', 'bad_data')",
+    )
+
+
 class APIKeySerializer(serializers.ModelSerializer):
     """
     Serializer for APIKey model.

@@ -57,6 +57,56 @@ pub struct ContractStats {
     pub event_count: u64,
 }
 
+/// A versioned, correlation-tracked event record (SC-38).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StructuredEventRecord {
+    /// The indexer that originally submitted this structured event.
+    pub indexer: Address,
+    /// The contract that emitted the original event.
+    pub contract_id: Address,
+    /// The type/category of the event.
+    pub event_type: Symbol,
+    /// SHA-256 hash of the event payload for verification.
+    pub payload_hash: BytesN<32>,
+    /// Caller-defined schema version for the payload (must be non-zero).
+    pub schema_version: u32,
+    /// Idempotency key supplied by the producer to make retries safe.
+    pub correlation_id: BytesN<32>,
+    /// Ledger sequence number when recorded.
+    pub ledger: u32,
+    /// Unix timestamp when recorded.
+    pub timestamp: u64,
+}
+
+/// Retraction metadata for a soft-revoked structured event (SC-37).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RetractionRecord {
+    /// Correlation ID of the structured event being retracted.
+    pub correlation_id: BytesN<32>,
+    /// The address (original indexer or admin) that requested the retraction.
+    pub retracted_by: Address,
+    /// A short, caller-supplied reason code (e.g. "reorg", "bad_data").
+    pub reason: Symbol,
+    /// Ledger sequence number when the retraction was recorded.
+    pub ledger: u32,
+    /// Unix timestamp when the retraction was recorded.
+    pub timestamp: u64,
+}
+
+/// Keyed storage entries that don't fit a single flat symbol key.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    /// SC-38 structured event, keyed by its correlation ID.
+    StructuredByCorrelation(BytesN<32>),
+    /// SC-38 latest structured event seen for a given event type.
+    LatestStructuredByType(Symbol),
+    /// SC-37 retraction record, keyed by the correlation ID it retracts.
+    RetractedByCorrelation(BytesN<32>),
+}
+
 /// Contract errors with explicit error codes.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -73,6 +123,14 @@ pub enum ContractError {
     InvalidBatchSize = 5,
     /// The indexer is currently paused and cannot record events (SC-10).
     IndexerPaused = 6,
+    /// Structured event `schema_version` must be non-zero (SC-38).
+    InvalidSchemaVersion = 7,
+    /// A structured event with this correlation ID was already recorded (SC-38).
+    DuplicateCorrelation = 8,
+    /// No structured event exists for the given correlation ID (SC-37).
+    StructuredEventNotFound = 9,
+    /// The structured event has already been retracted (SC-37).
+    AlreadyRetracted = 10,
 }
 
 #[contract]
@@ -276,13 +334,15 @@ impl SoroScanCore {
             return Err(ContractError::InvalidSchemaVersion);
         }
 
-        let indexers: Map<Address, bool> = env
+        let indexers: Map<Address, IndexerStatus> = env
             .storage()
             .instance()
             .get(&INDEXERS_KEY)
             .ok_or(ContractError::NotInitialized)?;
-        if !indexers.get(indexer).unwrap_or(false) {
-            return Err(ContractError::IndexerNotFound);
+        match indexers.get(indexer.clone()) {
+            Some(IndexerStatus::Active) => {}
+            Some(IndexerStatus::Paused) => return Err(ContractError::IndexerPaused),
+            None => return Err(ContractError::IndexerNotFound),
         }
 
         let correlation_key = DataKey::StructuredByCorrelation(correlation_id.clone());
@@ -291,6 +351,7 @@ impl SoroScanCore {
         }
 
         let record = StructuredEventRecord {
+            indexer: indexer.clone(),
             contract_id,
             event_type: event_type.clone(),
             payload_hash,
@@ -328,6 +389,86 @@ impl SoroScanCore {
         env.storage()
             .instance()
             .get(&DataKey::StructuredByCorrelation(correlation_id))
+    }
+
+    /// Retract (soft-revoke) a previously recorded SC-38 structured event (SC-37).
+    ///
+    /// Retraction does not delete the original record — `structured_by_correlation`
+    /// still returns it unchanged — but it stores retraction metadata and emits a
+    /// `retracted` event so off-chain indexers can flag or hide the event (e.g.
+    /// after a chain reorg or a data-quality issue) without losing on-chain
+    /// history or breaking correlation-based deduplication.
+    ///
+    /// Only the indexer that originally submitted the event, or the contract
+    /// admin, may retract it.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `caller` - The address requesting the retraction (original indexer or admin)
+    /// * `correlation_id` - The correlation ID of the structured event to retract
+    /// * `reason` - A short, caller-supplied reason code (e.g. "reorg", "bad_data")
+    pub fn retract_structured_event(
+        env: Env,
+        caller: Address,
+        correlation_id: BytesN<32>,
+        reason: Symbol,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let correlation_key = DataKey::StructuredByCorrelation(correlation_id.clone());
+        let record: StructuredEventRecord = env
+            .storage()
+            .instance()
+            .get(&correlation_key)
+            .ok_or(ContractError::StructuredEventNotFound)?;
+
+        let stored_admin: Option<Address> = env.storage().instance().get(&ADMIN_KEY);
+        let is_admin = stored_admin.as_ref() == Some(&caller);
+        let is_original_indexer = record.indexer == caller;
+
+        if !is_admin && !is_original_indexer {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let retraction_key = DataKey::RetractedByCorrelation(correlation_id.clone());
+        if env.storage().instance().has(&retraction_key) {
+            return Err(ContractError::AlreadyRetracted);
+        }
+
+        let retraction = RetractionRecord {
+            correlation_id,
+            retracted_by: caller,
+            reason: reason.clone(),
+            ledger: env.ledger().sequence(),
+            timestamp: env.ledger().timestamp(),
+        };
+        env.storage().instance().set(&retraction_key, &retraction);
+
+        env.events().publish(
+            (
+                symbol_short!("soroscan"),
+                symbol_short!("sc37"),
+                symbol_short!("retract"),
+            ),
+            retraction,
+        );
+
+        Ok(())
+    }
+
+    /// Check whether a structured event has been retracted (SC-37).
+    pub fn is_structured_event_retracted(env: Env, correlation_id: BytesN<32>) -> bool {
+        env.storage()
+            .instance()
+            .has(&DataKey::RetractedByCorrelation(correlation_id))
+    }
+
+    /// Get the retraction record for a structured event, if it has been
+    /// retracted (SC-37).
+    pub fn get_retraction(env: Env, correlation_id: BytesN<32>) -> Option<RetractionRecord> {
+        env.storage()
+            .instance()
+            .get(&DataKey::RetractedByCorrelation(correlation_id))
     }
 
     /// Get the latest event record for a specific event type.
@@ -1159,9 +1300,12 @@ mod tests {
         assert!(all_events.len() >= 5);
 
         // Find the event with topic "event1"
+        // Note: `env.events().all()` returns `(Address, Vec<Val>, Val)` tuples
+        // in this soroban-sdk version, so topics/value are accessed positionally
+        // (`.1` = topics, `.2` = payload value) rather than by named field.
         let event1 = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("event1");
                 }
             }
@@ -1169,14 +1313,14 @@ mod tests {
         }).expect("event1 should exist");
 
         // Verify topic extraction
-        assert_eq!(event1.topics.len(), 3);
-        let extracted_sym = Symbol::try_from_val(&env, &event1.topics.get(1).unwrap()).unwrap();
+        assert_eq!(event1.1.len(), 3);
+        let extracted_sym = Symbol::try_from_val(&env, &event1.1.get(1).unwrap()).unwrap();
         assert_eq!(extracted_sym, val_symbol);
-        let extracted_bool = bool::try_from_val(&env, &event1.topics.get(2).unwrap()).unwrap();
+        let extracted_bool = bool::try_from_val(&env, &event1.1.get(2).unwrap()).unwrap();
         assert_eq!(extracted_bool, val_bool);
 
         // Verify payload decoding
-        let payload1: (u32, i32, u64, i64) = TryFromVal::try_from_val(&env, &event1.value).unwrap();
+        let payload1: (u32, i32, u64, i64) = TryFromVal::try_from_val(&env, &event1.2).unwrap();
         assert_eq!(payload1.0, val_u32);
         assert_eq!(payload1.1, val_i32);
         assert_eq!(payload1.2, val_u64);
@@ -1184,25 +1328,25 @@ mod tests {
 
         // Find event2
         let event2 = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("event2");
                 }
             }
             false
         }).expect("event2 should exist");
 
-        let extracted_addr = Address::try_from_val(&env, &event2.topics.get(1).unwrap()).unwrap();
+        let extracted_addr = Address::try_from_val(&env, &event2.1.get(1).unwrap()).unwrap();
         assert_eq!(extracted_addr, val_address);
 
-        let payload2: (u128, i128) = TryFromVal::try_from_val(&env, &event2.value).unwrap();
+        let payload2: (u128, i128) = TryFromVal::try_from_val(&env, &event2.2).unwrap();
         assert_eq!(payload2.0, val_u128);
         assert_eq!(payload2.1, val_i128);
 
         // Find event3
         let event3 = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("event3");
                 }
             }
@@ -1210,7 +1354,7 @@ mod tests {
         }).expect("event3 should exist");
 
         let payload3: (soroban_sdk::Bytes, BytesN<32>, Map<Symbol, u32>, soroban_sdk::Vec<Symbol>) =
-            TryFromVal::try_from_val(&env, &event3.value).unwrap();
+            TryFromVal::try_from_val(&env, &event3.2).unwrap();
         assert_eq!(payload3.0, val_bytes);
         assert_eq!(payload3.1, val_bytes_n);
         assert_eq!(payload3.2.get(symbol_short!("key1")).unwrap(), 100);
@@ -1218,25 +1362,25 @@ mod tests {
 
         // Find empty event
         let event_empty = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("empty");
                 }
             }
             false
         }).expect("empty event should exist");
-        assert_eq!(event_empty.topics.len(), 1); // just "empty"
+        assert_eq!(event_empty.1.len(), 1); // just "empty"
 
         // Find large event
         let event_large = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("large");
                 }
             }
             false
         }).expect("large event should exist");
-        let payload_large: Map<u32, BytesN<32>> = TryFromVal::try_from_val(&env, &event_large.value).unwrap();
+        let payload_large: Map<u32, BytesN<32>> = TryFromVal::try_from_val(&env, &event_large.2).unwrap();
         assert_eq!(payload_large.len(), 10);
         assert_eq!(payload_large.get(5).unwrap(), BytesN::from_array(&env, &[5u8; 32]));
     }
@@ -1365,5 +1509,229 @@ mod tests {
             &BytesN::from_array(&env, &[0u8; 32]),
         );
         assert_eq!(count, 1);
+    }
+
+    // ── SC-38: structured events ────────────────────────────────────────────
+
+    fn record_structured(
+        env: &Env,
+        client: &SoroScanCoreClient,
+        indexer: &Address,
+        target: &Address,
+        correlation_byte: u8,
+    ) -> BytesN<32> {
+        let correlation_id = BytesN::from_array(env, &[correlation_byte; 32]);
+        client.record_structured_event(
+            indexer,
+            target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(env, &[9u8; 32]),
+            &1,
+            &correlation_id,
+        );
+        correlation_id
+    }
+
+    #[test]
+    fn test_record_structured_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = record_structured(&env, &client, &indexer, &target, 1);
+
+        assert_eq!(client.total_events(), 1);
+        let record = client
+            .structured_by_correlation(&correlation_id)
+            .expect("structured event should be stored");
+        assert_eq!(record.indexer, indexer);
+        assert_eq!(record.contract_id, target);
+        assert_eq!(record.schema_version, 1);
+    }
+
+    #[test]
+    fn test_record_structured_event_rejects_zero_schema_version() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let result = client.try_record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &0,
+            &BytesN::from_array(&env, &[1u8; 32]),
+        );
+        assert_eq!(result, Err(Ok(ContractError::InvalidSchemaVersion)));
+    }
+
+    #[test]
+    fn test_record_structured_event_rejects_duplicate_correlation() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        record_structured(&env, &client, &indexer, &target, 5);
+
+        let result = client.try_record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[9u8; 32]),
+            &1,
+            &BytesN::from_array(&env, &[5u8; 32]),
+        );
+        assert_eq!(result, Err(Ok(ContractError::DuplicateCorrelation)));
+        assert_eq!(client.total_events(), 1);
+    }
+
+    #[test]
+    fn test_record_structured_event_paused_indexer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+        client.pause_indexer(&admin, &indexer);
+
+        let result = client.try_record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &1,
+            &BytesN::from_array(&env, &[1u8; 32]),
+        );
+        assert_eq!(result, Err(Ok(ContractError::IndexerPaused)));
+    }
+
+    // ── SC-37: structured event retraction ──────────────────────────────────
+
+    #[test]
+    fn test_retract_structured_event_by_original_indexer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = record_structured(&env, &client, &indexer, &target, 1);
+        assert!(!client.is_structured_event_retracted(&correlation_id));
+
+        client.retract_structured_event(&indexer, &correlation_id, &symbol_short!("reorg"));
+
+        assert!(client.is_structured_event_retracted(&correlation_id));
+        let retraction = client
+            .get_retraction(&correlation_id)
+            .expect("retraction should be stored");
+        assert_eq!(retraction.retracted_by, indexer);
+        assert_eq!(retraction.reason, symbol_short!("reorg"));
+
+        // The original structured event is preserved, not deleted.
+        let record = client
+            .structured_by_correlation(&correlation_id)
+            .expect("original structured event should still exist");
+        assert_eq!(record.correlation_id, correlation_id);
+    }
+
+    #[test]
+    fn test_retract_structured_event_by_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = record_structured(&env, &client, &indexer, &target, 2);
+
+        client.retract_structured_event(&admin, &correlation_id, &symbol_short!("badata"));
+        assert!(client.is_structured_event_retracted(&correlation_id));
+    }
+
+    #[test]
+    fn test_retract_structured_event_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = record_structured(&env, &client, &indexer, &target, 3);
+
+        let other_indexer = Address::generate(&env);
+        client.add_indexer(&admin, &other_indexer);
+
+        let result = client.try_retract_structured_event(
+            &other_indexer,
+            &correlation_id,
+            &symbol_short!("reorg"),
+        );
+        assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+        assert!(!client.is_structured_event_retracted(&correlation_id));
+    }
+
+    #[test]
+    fn test_retract_structured_event_not_found() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let missing_correlation_id = BytesN::from_array(&env, &[42u8; 32]);
+        let result = client.try_retract_structured_event(
+            &indexer,
+            &missing_correlation_id,
+            &symbol_short!("reorg"),
+        );
+        assert_eq!(result, Err(Ok(ContractError::StructuredEventNotFound)));
+    }
+
+    #[test]
+    fn test_retract_structured_event_already_retracted() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = record_structured(&env, &client, &indexer, &target, 4);
+        client.retract_structured_event(&indexer, &correlation_id, &symbol_short!("reorg"));
+
+        let result = client.try_retract_structured_event(
+            &indexer,
+            &correlation_id,
+            &symbol_short!("reorg"),
+        );
+        assert_eq!(result, Err(Ok(ContractError::AlreadyRetracted)));
+    }
+
+    #[test]
+    fn test_is_structured_event_retracted_false_when_untouched() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = record_structured(&env, &client, &indexer, &target, 6);
+        assert!(!client.is_structured_event_retracted(&correlation_id));
+        assert!(client.get_retraction(&correlation_id).is_none());
     }
 }

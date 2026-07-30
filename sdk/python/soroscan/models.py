@@ -126,3 +126,31 @@ class RecordEventsBatchResponse(BaseModel):
     tx_hash: str | None = Field(None, description="Transaction hash")
     transaction_status: str | None = Field(None, description="Transaction status")
     error: str | None = Field(None, description="Error message if failed")
+
+
+# ── SC-37: Structured event retraction ────────────────────────────────────────
+
+class RetractStructuredEventRequest(BaseModel):
+    """Request model to retract (soft-revoke) an SC-38 structured event (SC-37).
+
+    Retraction preserves the original on-chain event; it only records that the
+    event identified by ``correlation_id`` should be treated as revoked.
+    """
+
+    correlation_id: str = Field(
+        ..., max_length=64, min_length=64, description="SHA-256-sized hex correlation ID"
+    )
+    reason: str = Field(
+        default="unspecified",
+        max_length=32,
+        description="Short reason code for the retraction (e.g. 'reorg', 'bad_data')",
+    )
+
+
+class RetractStructuredEventResponse(BaseModel):
+    """Response from retracting a structured event (SC-37)."""
+
+    status: str = Field(..., description="Submission status")
+    tx_hash: str | None = Field(None, description="Transaction hash")
+    transaction_status: str | None = Field(None, description="Transaction status")
+    error: str | None = Field(None, description="Error message if failed")

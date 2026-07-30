@@ -145,6 +145,20 @@ def _handle_record_event(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_retract_event(args: argparse.Namespace) -> int:
+    """Retract (soft-revoke) a previously recorded SC-38 structured event (SC-37)."""
+    with _build_client(args) as client:
+        result = client.retract_structured_event(
+            correlation_id=args.correlation_id,
+            reason=args.reason,
+        )
+    if args.output == "json":
+        _print_json(result)
+    else:
+        _print_table([result], ["status", "tx_hash", "transaction_status", "error"])
+    return 0
+
+
 def _handle_webhooks(args: argparse.Namespace) -> int:
     with _build_client(args) as client:
         if args.webhook_command == "test":
@@ -238,6 +252,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     record.add_argument("--output", choices=["table", "json"], default="table")
     record.set_defaults(func=_handle_record_event)
+
+    # SC-37: retract a previously recorded SC-38 structured event
+    retract = subcommands.add_parser(
+        "retract-event",
+        help="Retract (soft-revoke) a structured event by correlation ID",
+    )
+    retract.add_argument(
+        "correlation_id",
+        help="64-character hex correlation ID of the structured event to retract",
+    )
+    retract.add_argument(
+        "--reason",
+        default="unspecified",
+        help="Short reason code for the retraction (e.g. 'reorg', 'bad_data')",
+    )
+    retract.add_argument("--output", choices=["table", "json"], default="table")
+    retract.set_defaults(func=_handle_retract_event)
 
     return parser
 
