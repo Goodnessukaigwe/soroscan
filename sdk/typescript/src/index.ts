@@ -23,6 +23,8 @@ export type {
   GetEventsByContractsResponse,
   RecordStructuredEventParams,
   RecordStructuredEventResponse,
+  RevokeStructuredEventParams,
+  RevokeStructuredEventResponse,
   // Contracts
   ContractType,
   ContractSpec,

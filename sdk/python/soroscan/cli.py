@@ -145,6 +145,34 @@ def _handle_record_event(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_record_structured_event(args: argparse.Namespace) -> int:
+    """Submit an SC-38 structured event to the SoroScan contract."""
+    with _build_client(args) as client:
+        result = client.record_structured_event(
+            contract_id=args.contract_id,
+            event_type=args.event_type,
+            payload_hash=args.payload_hash,
+            schema_version=args.schema_version,
+            correlation_id=args.correlation_id,
+        )
+    if args.output == "json":
+        _print_json(result)
+    else:
+        _print_table([result], ["status", "tx_hash", "transaction_status", "error"])
+    return 0
+
+
+def _handle_revoke_structured_event(args: argparse.Namespace) -> int:
+    """Revoke a previously recorded SC-38 structured event (SC-42)."""
+    with _build_client(args) as client:
+        result = client.revoke_structured_event(correlation_id=args.correlation_id)
+    if args.output == "json":
+        _print_json(result)
+    else:
+        _print_table([result], ["status", "tx_hash", "transaction_status", "error"])
+    return 0
+
+
 def _handle_webhooks(args: argparse.Namespace) -> int:
     with _build_client(args) as client:
         if args.webhook_command == "test":
@@ -238,6 +266,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     record.add_argument("--output", choices=["table", "json"], default="table")
     record.set_defaults(func=_handle_record_event)
+
+    # SC-38: record a structured event from the CLI
+    record_structured = subcommands.add_parser(
+        "record-structured-event",
+        help="Submit a versioned, correlation-safe structured event (SC-38)",
+    )
+    record_structured.add_argument("contract_id", help="Target contract address (C...)")
+    record_structured.add_argument("event_type", help="Event type name (e.g. transfer, swap)")
+    record_structured.add_argument(
+        "payload_hash",
+        help="SHA-256 hex hash of the event payload (64 hex chars)",
+    )
+    record_structured.add_argument(
+        "schema_version",
+        type=int,
+        help="Payload schema version (must be >= 1)",
+    )
+    record_structured.add_argument(
+        "correlation_id",
+        help="64-character hex correlation ID used for retry safety",
+    )
+    record_structured.add_argument("--output", choices=["table", "json"], default="table")
+    record_structured.set_defaults(func=_handle_record_structured_event)
+
+    # SC-42: revoke a previously recorded structured event
+    revoke = subcommands.add_parser(
+        "revoke-structured-event",
+        help="Revoke a structured event by correlation ID (SC-42)",
+    )
+    revoke.add_argument(
+        "correlation_id",
+        help="64-character hex correlation ID of the structured event to revoke",
+    )
+    revoke.add_argument("--output", choices=["table", "json"], default="table")
+    revoke.set_defaults(func=_handle_revoke_structured_event)
 
     return parser
 

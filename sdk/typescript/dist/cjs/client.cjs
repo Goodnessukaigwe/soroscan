@@ -130,6 +130,31 @@ class SoroScanClient {
             error: response.error,
         };
     }
+    /**
+     * Revoke a previously recorded SC-38 structured event (SC-42).
+     *
+     * Marks the on-chain structured event as revoked so off-chain consumers can
+     * treat it as invalid, while preserving the original audit trail. Revocation
+     * is permanent; a second attempt fails with AlreadyRevoked.
+     *
+     * @example
+     * const result = await client.revokeStructuredEvent({
+     *   correlationId: 'b'.repeat(64),
+     * });
+     */
+    async revokeStructuredEvent(params) {
+        const response = await this.#request("POST", "/api/record/structured/revoke/", {
+            body: {
+                correlation_id: params.correlationId,
+            },
+        });
+        return {
+            status: response.status,
+            txHash: response.tx_hash,
+            transactionStatus: response.transaction_status,
+            error: response.error,
+        };
+    }
     // ─── Contracts ─────────────────────────────────────────────────────────────
     /**
      * Retrieve a paginated list of deployed contracts.

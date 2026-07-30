@@ -1,4 +1,4 @@
-import type { SoroScanClientConfig, SoroScanApiError, GetEventsParams, GetEventsResponse, GetEventsByContractsParams, GetEventsByContractsResponse, RecordStructuredEventParams, RecordStructuredEventResponse, GetContractsParams, GetContractsResponse, GetContractParams, Contract, GetTransactionsParams, GetTransactionsResponse, GetLedgersParams, GetLedgersResponse, GetAccountParams, Account, SubscribeWebhookParams, UpdateWebhookParams, Webhook, WebhookListResponse, PaginatedResponse } from "./types.js";
+import type { SoroScanClientConfig, SoroScanApiError, GetEventsParams, GetEventsResponse, GetEventsByContractsParams, GetEventsByContractsResponse, RecordStructuredEventParams, RecordStructuredEventResponse, RevokeStructuredEventParams, RevokeStructuredEventResponse, GetContractsParams, GetContractsResponse, GetContractParams, Contract, GetTransactionsParams, GetTransactionsResponse, GetLedgersParams, GetLedgersResponse, GetAccountParams, Account, SubscribeWebhookParams, UpdateWebhookParams, Webhook, WebhookListResponse, PaginatedResponse } from "./types.js";
 export declare class SoroScanError extends Error {
     readonly statusCode: number;
     readonly code: string;
@@ -23,6 +23,19 @@ export declare class SoroScanClient {
      * explicit: the contract rejects a repeated ID without publishing twice.
      */
     recordStructuredEvent(params: RecordStructuredEventParams): Promise<RecordStructuredEventResponse>;
+    /**
+     * Revoke a previously recorded SC-38 structured event (SC-42).
+     *
+     * Marks the on-chain structured event as revoked so off-chain consumers can
+     * treat it as invalid, while preserving the original audit trail. Revocation
+     * is permanent; a second attempt fails with AlreadyRevoked.
+     *
+     * @example
+     * const result = await client.revokeStructuredEvent({
+     *   correlationId: 'b'.repeat(64),
+     * });
+     */
+    revokeStructuredEvent(params: RevokeStructuredEventParams): Promise<RevokeStructuredEventResponse>;
     /**
      * Retrieve a paginated list of deployed contracts.
      *

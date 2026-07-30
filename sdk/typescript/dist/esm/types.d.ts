@@ -89,6 +89,17 @@ export interface RecordStructuredEventResponse {
     transactionStatus: string;
     error?: string;
 }
+/** Input to revoke a previously recorded SC-38 structured event (SC-42). */
+export interface RevokeStructuredEventParams {
+    /** 64-character hex correlation ID of the structured event to revoke */
+    correlationId: string;
+}
+export interface RevokeStructuredEventResponse {
+    status: "submitted" | "failed";
+    txHash?: string;
+    transactionStatus: string;
+    error?: string;
+}
 export type ContractType = "token" | "nft" | "dex" | "lending" | "custom";
 export interface ContractSpec {
     functions: ContractFunction[];
@@ -235,6 +246,64 @@ export interface UpdateWebhookParams {
 export interface WebhookListResponse {
     items: Webhook[];
     totalCount: number;
+}
+export interface ContractEventTypeInfo {
+    /** Event type name */
+    eventType: string;
+    /** Number of events of this type */
+    count: number;
+    /** ISO timestamp of first occurrence */
+    firstSeen: string;
+    /** ISO timestamp of last occurrence */
+    lastSeen: string;
+}
+export interface EventEntry {
+    /** Target contract address */
+    contractId: ContractId;
+    /** Event type name (e.g. "transfer", "swap") */
+    eventType: EventType;
+    /** SHA-256 hash of the event payload (hex) */
+    payloadHash: string;
+}
+export interface RecordEventsBatchParams {
+    /** 1–25 event entries to record in a single transaction */
+    events: EventEntry[];
+}
+export interface RecordEventsBatchResponse {
+    status: string;
+    /** New total event count after the batch */
+    totalEvents: number;
+    txHash: string | null;
+    transactionStatus: string | null;
+    error: string | null;
+}
+export interface WebSocketClientConfig {
+    /** Base URL of the SoroScan WebSocket server (e.g., "wss://api.soroscan.io") */
+    wsUrl: string;
+    /** Optional API key for authentication */
+    apiKey?: string;
+    /** Initial reconnection delay in milliseconds (default: 1000) */
+    initialReconnectDelay?: number;
+    /** Maximum reconnection delay in milliseconds (default: 30000) */
+    maxReconnectDelay?: number;
+    /** Backoff multiplier for exponential backoff (default: 2) */
+    backoffMultiplier?: number;
+    /** Whether to add jitter to reconnection delays (default: true) */
+    useJitter?: boolean;
+    /** Maximum messages to buffer while disconnected (default: 1000) */
+    maxBufferSize?: number;
+}
+export type EventCallback = (event: ContractEvent) => void;
+export type ConnectionCallback = () => void;
+export type ErrorCallback = (error: Error) => void;
+export type ReconnectingCallback = (attempt: number, delay: number) => void;
+export interface EventFilter {
+    /** Filter by contract ID */
+    contractId?: string;
+    /** Filter by event type */
+    eventType?: EventType;
+    /** Filter by topics */
+    topics?: Partial<ContractEventTopic>[];
 }
 export interface SoroScanApiError {
     code: string;

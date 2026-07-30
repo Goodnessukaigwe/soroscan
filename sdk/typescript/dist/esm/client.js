@@ -1,3 +1,4 @@
+import { EventQueryBuilder, ContractQueryBuilder } from "./builder.js";
 // ─────────────────────────────────────────────────────────────────────────────
 // Error class
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,6 +87,35 @@ export class SoroScanClient {
         }
         return json;
     }
+    // ─── Builder factories (SC-10) ────────────────────────────────────────────
+    /**
+     * Create a fluent event query builder (SC-10).
+     *
+     * @example
+     * const result = await client
+     *   .events()
+     *   .filterByContract("CCAAA...")
+     *   .filterByEventType("transfer")
+     *   .filterByLedgerRange(1_000, 2_000)
+     *   .execute();
+     */
+    events() {
+        return new EventQueryBuilder(this);
+    }
+    /**
+     * Create a fluent contract query builder (SC-10).
+     *
+     * @example
+     * const result = await client
+     *   .contracts()
+     *   .filterByType("token")
+     *   .filterByVerified(true)
+     *   .search("my-token")
+     *   .execute();
+     */
+    contracts() {
+        return new ContractQueryBuilder(this);
+    }
     // ─── Events ────────────────────────────────────────────────────────────────
     /**
      * Retrieve a paginated list of contract events.
@@ -126,6 +156,31 @@ export class SoroScanClient {
             error: response.error,
         };
     }
+    /**
+     * Revoke a previously recorded SC-38 structured event (SC-42).
+     *
+     * Marks the on-chain structured event as revoked so off-chain consumers can
+     * treat it as invalid, while preserving the original audit trail. Revocation
+     * is permanent; a second attempt fails with AlreadyRevoked.
+     *
+     * @example
+     * const result = await client.revokeStructuredEvent({
+     *   correlationId: 'b'.repeat(64),
+     * });
+     */
+    async revokeStructuredEvent(params) {
+        const response = await this.#request("POST", "/api/record/structured/revoke/", {
+            body: {
+                correlation_id: params.correlationId,
+            },
+        });
+        return {
+            status: response.status,
+            txHash: response.tx_hash,
+            transactionStatus: response.transaction_status,
+            error: response.error,
+        };
+    }
     // ─── Contracts ─────────────────────────────────────────────────────────────
     /**
      * Retrieve a paginated list of deployed contracts.
@@ -147,6 +202,18 @@ export class SoroScanClient {
     async getContract(params) {
         const { contractId } = params;
         return this.#request("GET", `/v1/contracts/${encodeURIComponent(contractId)}`);
+    }
+    /**
+     * Get event types and their counts for a specific contract (SC-17).
+     *
+     * @example
+     * const types = await client.getContractEventTypes('CCAAA...');
+     * for (const t of types) {
+     *   console.log(t.eventType, t.count);
+     * }
+     */
+    async getContractEventTypes(contractId) {
+        return this.#request("GET", `/v1/contracts/${encodeURIComponent(contractId)}/event-types`);
     }
     // ─── Transactions ──────────────────────────────────────────────────────────
     /**
@@ -188,6 +255,22 @@ export class SoroScanClient {
         return this.#request("GET", `/v1/accounts/${encodeURIComponent(accountId)}`);
     }
     // ─── Webhooks ──────────────────────────────────────────────────────────────
+    /**
+     * Record multiple events in a single transaction (SC-29).
+     * Maximum 25 events per batch.
+     *
+     * @example
+     * const result = await client.recordEventsBatch({
+     *   events: [
+     *     { contractId: 'CCAAA...', eventType: 'transfer', payloadHash: 'abc...' },
+     *     { contractId: 'CCAAA...', eventType: 'swap', payloadHash: 'def...' },
+     *   ],
+     * });
+     * console.log('Total events:', result.totalEvents);
+     */
+    async recordEventsBatch(params) {
+        return this.#request("POST", "/v1/record-events-batch", { body: params });
+    }
     /**
      * Create a new webhook subscription.
      *

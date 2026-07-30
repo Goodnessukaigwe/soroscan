@@ -67,6 +67,7 @@ from .serializers import (
     OrganizationCorsSerializer,
     OrganizationCostSnapshotSerializer,
     RecordEventRequestSerializer,
+    RevokeStructuredEventRequestSerializer,
     StructuredEventRequestSerializer,
     TeamMemberAddSerializer,
     TeamSerializer,
@@ -1045,6 +1046,35 @@ def record_structured_event_view(request):
         event_type=data["event_type"],
         payload_hash_hex=data["payload_hash"],
         schema_version=data["schema_version"],
+        correlation_id_hex=data["correlation_id"],
+    )
+    if result.success:
+        return Response(
+            {
+                "status": "submitted",
+                "tx_hash": result.tx_hash,
+                "transaction_status": result.status,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+    return Response(
+        {"status": "failed", "error": result.error, "transaction_status": result.status},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@extend_schema(request=RevokeStructuredEventRequestSerializer)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([IngestRateThrottle, AnonRateThrottle, UserRateThrottle])
+def revoke_structured_event_view(request):
+    """Relay an SC-42 revocation for a previously recorded SC-38 structured event."""
+    serializer = RevokeStructuredEventRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    data = serializer.validated_data
+    result = SorobanClient().revoke_structured_event(
         correlation_id_hex=data["correlation_id"],
     )
     if result.success:

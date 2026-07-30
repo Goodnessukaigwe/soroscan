@@ -91,6 +91,48 @@ class RecordEventResponse(BaseModel):
     error: str | None = Field(None, description="Error message if failed")
 
 
+# ── SC-38: Structured event recording ─────────────────────────────────────────
+
+class StructuredEventRequest(BaseModel):
+    """Request model for recording an SC-38 structured event."""
+
+    contract_id: str = Field(..., max_length=56, description="Target contract address")
+    event_type: str = Field(..., max_length=100, description="Event type name")
+    payload_hash: str = Field(..., max_length=64, description="SHA-256 hash of payload (hex)")
+    schema_version: int = Field(..., ge=1, description="Payload schema version (must be >= 1)")
+    correlation_id: str = Field(
+        ..., max_length=64, min_length=64, description="SHA-256-sized hex correlation ID"
+    )
+
+
+class StructuredEventResponse(BaseModel):
+    """Response from recording an SC-38 structured event."""
+
+    status: str = Field(..., description="Submission status")
+    tx_hash: str | None = Field(None, description="Transaction hash")
+    transaction_status: str | None = Field(None, description="Transaction status")
+    error: str | None = Field(None, description="Error message if failed")
+
+
+# ── SC-42: Structured event revocation ────────────────────────────────────────
+
+class RevokeStructuredEventRequest(BaseModel):
+    """Request model to revoke a previously recorded SC-38 structured event (SC-42)."""
+
+    correlation_id: str = Field(
+        ..., max_length=64, min_length=64, description="SHA-256-sized hex correlation ID"
+    )
+
+
+class RevokeStructuredEventResponse(BaseModel):
+    """Response from revoking a structured event (SC-42)."""
+
+    status: str = Field(..., description="Submission status")
+    tx_hash: str | None = Field(None, description="Transaction hash")
+    transaction_status: str | None = Field(None, description="Transaction status")
+    error: str | None = Field(None, description="Error message if failed")
+
+
 # ── SC-17: Contract event type info ───────────────────────────────────────────
 
 class ContractEventTypeInfo(BaseModel):

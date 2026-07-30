@@ -27,6 +27,10 @@ from soroscan.models import (
     RecordEventResponse,
     RecordEventsBatchRequest,
     RecordEventsBatchResponse,
+    RevokeStructuredEventRequest,
+    RevokeStructuredEventResponse,
+    StructuredEventRequest,
+    StructuredEventResponse,
     TrackedContract,
     WebhookSubscription,
 )
@@ -413,6 +417,66 @@ class SoroScanClient:
         response = self._client.post(url, headers=self._get_headers(), json=request.model_dump())
         data = self._handle_response(response)
         return RecordEventResponse.model_validate(data)
+
+    def record_structured_event(
+        self,
+        contract_id: str,
+        event_type: str,
+        payload_hash: str,
+        schema_version: int,
+        correlation_id: str,
+    ) -> StructuredEventResponse:
+        """
+        Record an SC-38 structured event (versioned, correlation-deduplicated).
+
+        Args:
+            contract_id: Target contract address
+            event_type: Event type name
+            payload_hash: SHA-256 hash of payload (hex)
+            schema_version: Payload schema version (must be >= 1)
+            correlation_id: 64-character hex correlation ID used for retry safety
+
+        Returns:
+            Submission result
+        """
+        url = urljoin(self.base_url, "/api/record/structured/")
+        request = StructuredEventRequest(
+            contract_id=contract_id,
+            event_type=event_type,
+            payload_hash=payload_hash,
+            schema_version=schema_version,
+            correlation_id=correlation_id,
+        )
+        response = self._client.post(
+            url, headers=self._get_headers(), json=request.model_dump()
+        )
+        data = self._handle_response(response)
+        return StructuredEventResponse.model_validate(data)
+
+    def revoke_structured_event(
+        self,
+        correlation_id: str,
+    ) -> RevokeStructuredEventResponse:
+        """
+        Revoke a previously recorded SC-38 structured event (SC-42).
+
+        Marks the on-chain structured event as revoked so off-chain consumers can
+        treat it as invalid, while preserving the original audit trail. Revocation
+        is permanent; a second attempt fails with AlreadyRevoked.
+
+        Args:
+            correlation_id: 64-character hex correlation ID of the structured event
+
+        Returns:
+            Submission result
+        """
+        url = urljoin(self.base_url, "/api/record/structured/revoke/")
+        request = RevokeStructuredEventRequest(correlation_id=correlation_id)
+        response = self._client.post(
+            url, headers=self._get_headers(), json=request.model_dump()
+        )
+        data = self._handle_response(response)
+        return RevokeStructuredEventResponse.model_validate(data)
 
     def record_events_batch(
         self,
@@ -937,6 +1001,62 @@ class AsyncSoroScanClient:
         )
         data = self._handle_response(response)
         return RecordEventResponse.model_validate(data)
+
+    async def record_structured_event(
+        self,
+        contract_id: str,
+        event_type: str,
+        payload_hash: str,
+        schema_version: int,
+        correlation_id: str,
+    ) -> StructuredEventResponse:
+        """
+        Record an SC-38 structured event (versioned, correlation-deduplicated).
+
+        Args:
+            contract_id: Target contract address
+            event_type: Event type name
+            payload_hash: SHA-256 hash of payload (hex)
+            schema_version: Payload schema version (must be >= 1)
+            correlation_id: 64-character hex correlation ID used for retry safety
+
+        Returns:
+            Submission result
+        """
+        url = urljoin(self.base_url, "/api/record/structured/")
+        request = StructuredEventRequest(
+            contract_id=contract_id,
+            event_type=event_type,
+            payload_hash=payload_hash,
+            schema_version=schema_version,
+            correlation_id=correlation_id,
+        )
+        response = await self._client.post(
+            url, headers=self._get_headers(), json=request.model_dump()
+        )
+        data = self._handle_response(response)
+        return StructuredEventResponse.model_validate(data)
+
+    async def revoke_structured_event(
+        self,
+        correlation_id: str,
+    ) -> RevokeStructuredEventResponse:
+        """
+        Revoke a previously recorded SC-38 structured event (SC-42).
+
+        Args:
+            correlation_id: 64-character hex correlation ID of the structured event
+
+        Returns:
+            Submission result
+        """
+        url = urljoin(self.base_url, "/api/record/structured/revoke/")
+        request = RevokeStructuredEventRequest(correlation_id=correlation_id)
+        response = await self._client.post(
+            url, headers=self._get_headers(), json=request.model_dump()
+        )
+        data = self._handle_response(response)
+        return RevokeStructuredEventResponse.model_validate(data)
 
     async def record_events_batch(
         self,

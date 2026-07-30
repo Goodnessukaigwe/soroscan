@@ -57,6 +57,39 @@ pub struct ContractStats {
     pub event_count: u64,
 }
 
+/// A versioned, correlation-tracked event record (SC-38), extended with a
+/// revocation flag so erroneous submissions can be marked invalid (SC-42).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StructuredEventRecord {
+    /// The contract that emitted the original event.
+    pub contract_id: Address,
+    /// The type/category of the event.
+    pub event_type: Symbol,
+    /// SHA-256 hash of the event payload for verification.
+    pub payload_hash: BytesN<32>,
+    /// Schema version of the payload (must be >= 1).
+    pub schema_version: u32,
+    /// Caller-supplied 32-byte id used to deduplicate retries.
+    pub correlation_id: BytesN<32>,
+    /// Ledger sequence number when recorded.
+    pub ledger: u32,
+    /// Unix timestamp when recorded.
+    pub timestamp: u64,
+    /// Whether the event has been revoked (SC-42).
+    pub revoked: bool,
+}
+
+/// Storage keys for structured event records (SC-38 / SC-42).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    /// Looks up a structured event record by its correlation ID.
+    StructuredByCorrelation(BytesN<32>),
+    /// Tracks the most recently recorded structured event for an event type.
+    LatestStructuredByType(Symbol),
+}
+
 /// Contract errors with explicit error codes.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -73,6 +106,14 @@ pub enum ContractError {
     InvalidBatchSize = 5,
     /// The indexer is currently paused and cannot record events (SC-10).
     IndexerPaused = 6,
+    /// Schema version must be greater than zero (SC-38).
+    InvalidSchemaVersion = 7,
+    /// A structured event with this correlation ID has already been recorded (SC-38).
+    DuplicateCorrelation = 8,
+    /// No structured event exists for the given correlation ID (SC-42).
+    StructuredEventNotFound = 9,
+    /// The structured event has already been revoked (SC-42).
+    AlreadyRevoked = 10,
 }
 
 #[contract]
@@ -276,13 +317,16 @@ impl SoroScanCore {
             return Err(ContractError::InvalidSchemaVersion);
         }
 
-        let indexers: Map<Address, bool> = env
+        let indexers: Map<Address, IndexerStatus> = env
             .storage()
             .instance()
             .get(&INDEXERS_KEY)
             .ok_or(ContractError::NotInitialized)?;
-        if !indexers.get(indexer).unwrap_or(false) {
-            return Err(ContractError::IndexerNotFound);
+
+        match indexers.get(indexer) {
+            Some(IndexerStatus::Active) => {}
+            Some(IndexerStatus::Paused) => return Err(ContractError::IndexerPaused),
+            None => return Err(ContractError::IndexerNotFound),
         }
 
         let correlation_key = DataKey::StructuredByCorrelation(correlation_id.clone());
@@ -298,6 +342,7 @@ impl SoroScanCore {
             correlation_id,
             ledger: env.ledger().sequence(),
             timestamp: env.ledger().timestamp(),
+            revoked: false,
         };
 
         let count = env
@@ -328,6 +373,97 @@ impl SoroScanCore {
         env.storage()
             .instance()
             .get(&DataKey::StructuredByCorrelation(correlation_id))
+    }
+
+    /// Revoke a previously recorded SC-38 structured event (SC-42).
+    ///
+    /// Revocation lets an authorized indexer flag a submission it recorded in
+    /// error (e.g. bad payload hash) as invalid without deleting the audit
+    /// trail. Revocation is permanent and rejects a second attempt so callers
+    /// get an explicit signal rather than a silent no-op.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `indexer` - The indexer address (must be authorized and active)
+    /// * `correlation_id` - The correlation ID of the structured event to revoke
+    pub fn revoke_structured_event(
+        env: Env,
+        indexer: Address,
+        correlation_id: BytesN<32>,
+    ) -> Result<(), ContractError> {
+        indexer.require_auth();
+
+        let indexers: Map<Address, IndexerStatus> = env
+            .storage()
+            .instance()
+            .get(&INDEXERS_KEY)
+            .ok_or(ContractError::NotInitialized)?;
+
+        match indexers.get(indexer.clone()) {
+            Some(IndexerStatus::Active) => {}
+            Some(IndexerStatus::Paused) => return Err(ContractError::IndexerPaused),
+            None => return Err(ContractError::IndexerNotFound),
+        }
+
+        let key = DataKey::StructuredByCorrelation(correlation_id.clone());
+        let mut record: StructuredEventRecord = env
+            .storage()
+            .instance()
+            .get(&key)
+            .ok_or(ContractError::StructuredEventNotFound)?;
+
+        if record.revoked {
+            return Err(ContractError::AlreadyRevoked);
+        }
+
+        record.revoked = true;
+        env.storage().instance().set(&key, &record);
+
+        // Keep the "latest by type" projection in sync when it points at the
+        // record being revoked.
+        let latest_key = DataKey::LatestStructuredByType(record.event_type.clone());
+        if let Some(latest) = env
+            .storage()
+            .instance()
+            .get::<DataKey, StructuredEventRecord>(&latest_key)
+        {
+            if latest.correlation_id == record.correlation_id {
+                env.storage().instance().set(&latest_key, &record);
+            }
+        }
+
+        env.events().publish(
+            (
+                symbol_short!("soroscan"),
+                symbol_short!("sc42"),
+                symbol_short!("revoke"),
+            ),
+            (indexer, record),
+        );
+
+        Ok(())
+    }
+
+    /// Check whether an SC-38 structured event has been revoked (SC-42).
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `correlation_id` - The correlation ID of the structured event to check
+    ///
+    /// # Returns
+    /// `true` if the event exists and has been revoked, `false` if it exists
+    /// and is still valid, or `ContractError::StructuredEventNotFound` if no
+    /// event with that correlation ID has been recorded.
+    pub fn is_structured_event_revoked(
+        env: Env,
+        correlation_id: BytesN<32>,
+    ) -> Result<bool, ContractError> {
+        let record: StructuredEventRecord = env
+            .storage()
+            .instance()
+            .get(&DataKey::StructuredByCorrelation(correlation_id))
+            .ok_or(ContractError::StructuredEventNotFound)?;
+        Ok(record.revoked)
     }
 
     /// Get the latest event record for a specific event type.
@@ -1159,9 +1295,12 @@ mod tests {
         assert!(all_events.len() >= 5);
 
         // Find the event with topic "event1"
+        // Note: `env.events().all()` returns `(Address, Vec<Val>, Val)` tuples
+        // in this soroban-sdk version, so topics/value are accessed positionally
+        // (`.1` = topics, `.2` = payload value) rather than by named field.
         let event1 = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("event1");
                 }
             }
@@ -1169,14 +1308,14 @@ mod tests {
         }).expect("event1 should exist");
 
         // Verify topic extraction
-        assert_eq!(event1.topics.len(), 3);
-        let extracted_sym = Symbol::try_from_val(&env, &event1.topics.get(1).unwrap()).unwrap();
+        assert_eq!(event1.1.len(), 3);
+        let extracted_sym = Symbol::try_from_val(&env, &event1.1.get(1).unwrap()).unwrap();
         assert_eq!(extracted_sym, val_symbol);
-        let extracted_bool = bool::try_from_val(&env, &event1.topics.get(2).unwrap()).unwrap();
+        let extracted_bool = bool::try_from_val(&env, &event1.1.get(2).unwrap()).unwrap();
         assert_eq!(extracted_bool, val_bool);
 
         // Verify payload decoding
-        let payload1: (u32, i32, u64, i64) = TryFromVal::try_from_val(&env, &event1.value).unwrap();
+        let payload1: (u32, i32, u64, i64) = TryFromVal::try_from_val(&env, &event1.2).unwrap();
         assert_eq!(payload1.0, val_u32);
         assert_eq!(payload1.1, val_i32);
         assert_eq!(payload1.2, val_u64);
@@ -1184,25 +1323,25 @@ mod tests {
 
         // Find event2
         let event2 = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("event2");
                 }
             }
             false
         }).expect("event2 should exist");
 
-        let extracted_addr = Address::try_from_val(&env, &event2.topics.get(1).unwrap()).unwrap();
+        let extracted_addr = Address::try_from_val(&env, &event2.1.get(1).unwrap()).unwrap();
         assert_eq!(extracted_addr, val_address);
 
-        let payload2: (u128, i128) = TryFromVal::try_from_val(&env, &event2.value).unwrap();
+        let payload2: (u128, i128) = TryFromVal::try_from_val(&env, &event2.2).unwrap();
         assert_eq!(payload2.0, val_u128);
         assert_eq!(payload2.1, val_i128);
 
         // Find event3
         let event3 = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("event3");
                 }
             }
@@ -1210,7 +1349,7 @@ mod tests {
         }).expect("event3 should exist");
 
         let payload3: (soroban_sdk::Bytes, BytesN<32>, Map<Symbol, u32>, soroban_sdk::Vec<Symbol>) =
-            TryFromVal::try_from_val(&env, &event3.value).unwrap();
+            TryFromVal::try_from_val(&env, &event3.2).unwrap();
         assert_eq!(payload3.0, val_bytes);
         assert_eq!(payload3.1, val_bytes_n);
         assert_eq!(payload3.2.get(symbol_short!("key1")).unwrap(), 100);
@@ -1218,25 +1357,25 @@ mod tests {
 
         // Find empty event
         let event_empty = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("empty");
                 }
             }
             false
         }).expect("empty event should exist");
-        assert_eq!(event_empty.topics.len(), 1); // just "empty"
+        assert_eq!(event_empty.1.len(), 1); // just "empty"
 
         // Find large event
         let event_large = all_events.iter().find(|e| {
-            if e.topics.len() > 0 {
-                if let Ok(sym) = Symbol::try_from_val(&env, &e.topics.get(0).unwrap()) {
+            if e.1.len() > 0 {
+                if let Ok(sym) = Symbol::try_from_val(&env, &e.1.get(0).unwrap()) {
                     return sym == symbol_short!("large");
                 }
             }
             false
         }).expect("large event should exist");
-        let payload_large: Map<u32, BytesN<32>> = TryFromVal::try_from_val(&env, &event_large.value).unwrap();
+        let payload_large: Map<u32, BytesN<32>> = TryFromVal::try_from_val(&env, &event_large.2).unwrap();
         assert_eq!(payload_large.len(), 10);
         assert_eq!(payload_large.get(5).unwrap(), BytesN::from_array(&env, &[5u8; 32]));
     }
@@ -1365,5 +1504,269 @@ mod tests {
             &BytesN::from_array(&env, &[0u8; 32]),
         );
         assert_eq!(count, 1);
+    }
+
+    // ── SC-38 / SC-42: structured events and revocation ─────────────────────
+
+    fn corr(env: &Env, byte: u8) -> BytesN<32> {
+        BytesN::from_array(env, &[byte; 32])
+    }
+
+    #[test]
+    fn test_record_structured_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = corr(&env, 1);
+        let count = client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &1u32,
+            &correlation_id,
+        );
+        assert_eq!(count, 1);
+
+        let record = client
+            .structured_by_correlation(&correlation_id)
+            .expect("record should exist");
+        assert_eq!(record.contract_id, target);
+        assert_eq!(record.schema_version, 1);
+        assert!(!record.revoked);
+        assert!(!client.is_structured_event_revoked(&correlation_id));
+    }
+
+    #[test]
+    fn test_record_structured_event_rejects_zero_schema_version() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let result = client.try_record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &0u32,
+            &corr(&env, 2),
+        );
+        assert_eq!(result, Err(Ok(ContractError::InvalidSchemaVersion)));
+    }
+
+    #[test]
+    fn test_record_structured_event_rejects_duplicate_correlation() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = corr(&env, 3);
+        client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &1u32,
+            &correlation_id,
+        );
+
+        let result = client.try_record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[1u8; 32]),
+            &1u32,
+            &correlation_id,
+        );
+        assert_eq!(result, Err(Ok(ContractError::DuplicateCorrelation)));
+    }
+
+    #[test]
+    fn test_paused_indexer_cannot_record_structured_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+        client.pause_indexer(&admin, &indexer);
+
+        let result = client.try_record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &1u32,
+            &corr(&env, 4),
+        );
+        assert_eq!(result, Err(Ok(ContractError::IndexerPaused)));
+    }
+
+    #[test]
+    fn test_revoke_structured_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = corr(&env, 5);
+        client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &1u32,
+            &correlation_id,
+        );
+
+        assert!(!client.is_structured_event_revoked(&correlation_id));
+
+        client.revoke_structured_event(&indexer, &correlation_id);
+
+        assert!(client.is_structured_event_revoked(&correlation_id));
+        let record = client.structured_by_correlation(&correlation_id).unwrap();
+        assert!(record.revoked);
+    }
+
+    #[test]
+    fn test_revoke_structured_event_updates_latest_by_type_projection() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = corr(&env, 6);
+        client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &1u32,
+            &correlation_id,
+        );
+
+        client.revoke_structured_event(&indexer, &correlation_id);
+
+        // Recording a second event for the same type should not be affected
+        // by the revocation of the first.
+        let other_correlation = corr(&env, 7);
+        client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[1u8; 32]),
+            &1u32,
+            &other_correlation,
+        );
+        assert!(!client.is_structured_event_revoked(&other_correlation));
+    }
+
+    #[test]
+    fn test_revoke_structured_event_twice_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = corr(&env, 8);
+        client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &1u32,
+            &correlation_id,
+        );
+        client.revoke_structured_event(&indexer, &correlation_id);
+
+        let result = client.try_revoke_structured_event(&indexer, &correlation_id);
+        assert_eq!(result, Err(Ok(ContractError::AlreadyRevoked)));
+    }
+
+    #[test]
+    fn test_revoke_nonexistent_structured_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let result = client.try_revoke_structured_event(&indexer, &corr(&env, 9));
+        assert_eq!(result, Err(Ok(ContractError::StructuredEventNotFound)));
+    }
+
+    #[test]
+    fn test_revoke_structured_event_unauthorized_indexer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        let rogue = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = corr(&env, 10);
+        client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &1u32,
+            &correlation_id,
+        );
+
+        let result = client.try_revoke_structured_event(&rogue, &correlation_id);
+        assert_eq!(result, Err(Ok(ContractError::IndexerNotFound)));
+    }
+
+    #[test]
+    fn test_revoke_structured_event_paused_indexer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let correlation_id = corr(&env, 11);
+        client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("swap"),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &1u32,
+            &correlation_id,
+        );
+
+        client.pause_indexer(&admin, &indexer);
+
+        let result = client.try_revoke_structured_event(&indexer, &correlation_id);
+        assert_eq!(result, Err(Ok(ContractError::IndexerPaused)));
+    }
+
+    #[test]
+    fn test_is_structured_event_revoked_missing_returns_error() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _admin, _indexer) = setup_contract(&env);
+        let result = client.try_is_structured_event_revoked(&corr(&env, 12));
+        assert_eq!(result, Err(Ok(ContractError::StructuredEventNotFound)));
     }
 }

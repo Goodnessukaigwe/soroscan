@@ -139,6 +139,23 @@ export interface RecordStructuredEventResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SC-42: Structured event revocation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Input to revoke a previously recorded SC-38 structured event (SC-42). */
+export interface RevokeStructuredEventParams {
+  /** 64-character hex correlation ID of the structured event to revoke */
+  correlationId: string;
+}
+
+export interface RevokeStructuredEventResponse {
+  status: "submitted" | "failed";
+  txHash?: string;
+  transactionStatus: string;
+  error?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Contracts
 // ─────────────────────────────────────────────────────────────────────────────
 

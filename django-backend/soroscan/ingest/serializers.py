@@ -578,6 +578,16 @@ class StructuredEventRequestSerializer(RecordEventRequestSerializer):
     )
 
 
+class RevokeStructuredEventRequestSerializer(serializers.Serializer):
+    """SC-42 request payload to revoke a previously recorded SC-38 structured event."""
+
+    correlation_id = serializers.CharField(
+        max_length=64,
+        min_length=64,
+        help_text="64-character hexadecimal correlation id of the event to revoke",
+    )
+
+
 class APIKeySerializer(serializers.ModelSerializer):
     """
     Serializer for APIKey model.

@@ -15,6 +15,26 @@ client.record_structured_event(contract_id, "transfer", payload_hash, 1, correla
 await client.recordStructuredEvent({ contractId, eventType: "transfer", payloadHash, schemaVersion: 1, correlationId });
 ```
 
+## SC-42 structured event revocation
+
+SC-42 lets an authorized indexer permanently mark a previously recorded SC-38
+structured event as revoked (for example after discovering a bad payload hash).
+The original record remains on-chain for audit purposes; the `revoked` flag and
+a `sc42`/`revoke` contract event tell off-chain consumers to treat it as
+invalid. Revoking the same correlation ID twice fails with `AlreadyRevoked`.
+
+```python
+client.revoke_structured_event(correlation_id)
+```
+
+```ts
+await client.revokeStructuredEvent({ correlationId });
+```
+
+```bash
+soroscan revoke-structured-event <correlation_id>
+```
+
 Official SDKs for the SoroScan API - Stellar/Soroban event indexing.
 
 ## Strict type verification

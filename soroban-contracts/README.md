@@ -51,6 +51,25 @@ stored and rejects retries that would otherwise publish a duplicate event.
 The Python and TypeScript SDKs expose this as `record_structured_event` and
 `recordStructuredEvent`; both submit to `POST /api/record/structured/`.
 
+## SC-42 structured event revocation
+
+`revoke_structured_event` lets an authorized, active indexer permanently mark a
+previously recorded SC-38 structured event as revoked. The original record is
+kept for audit purposes; the on-chain `revoked` flag and a `sc42`/`revoke`
+contract event signal off-chain consumers to treat the event as invalid.
+
+- Revoking an unknown `correlation_id` fails with `StructuredEventNotFound`.
+- Revoking an already-revoked event fails with `AlreadyRevoked`.
+- A paused indexer cannot revoke (`IndexerPaused`).
+- `is_structured_event_revoked` returns whether a known event has been revoked.
+- When the revoked event is the latest for its type, the
+  `LatestStructuredByType` projection is updated in place.
+
+The Python and TypeScript SDKs expose this as `revoke_structured_event` and
+`revokeStructuredEvent`; both submit to `POST /api/record/structured/revoke/`.
+The Python SDK also exposes a
+`soroscan revoke-structured-event <correlation_id>` CLI command.
+
 ## Deploying to Testnet
 
 ```bash
