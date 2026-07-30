@@ -504,6 +504,59 @@ curl -X GET \
 
 ---
 
+### Configure an indexer's per-ledger event rate limit (SC-26).
+
+**Endpoint:** `/api/ingest/indexers/rate-limit/`  
+**Methods:** `POST`  
+**Auth required:** ✅ Yes  
+
+Sets (or clears) the maximum number of events an indexer may record in a
+single ledger. Pass `max_events_per_ledger: 0` to clear an existing limit.
+
+#### Response Codes
+
+| Code | Description |
+|------|-------------|
+| `202` | Transaction submitted |
+| `400` | Validation or contract error |
+| `401` | Unauthorized – JWT token missing or invalid |
+
+#### Examples
+
+```bash
+curl -X POST \
+  https://api.soroscan.io/api/ingest/indexers/rate-limit/ \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"indexer": "GABC...", "max_events_per_ledger": 500}'
+```
+
+---
+
+### Get an indexer's configured per-ledger rate limit (SC-26).
+
+**Endpoint:** `/api/ingest/indexers/{indexer}/rate-limit/`  
+**Methods:** `GET`  
+**Auth required:** 🔓 No  
+
+Returns `max_events_per_ledger` for the indexer, or `null` when unrestricted.
+
+#### Response Codes
+
+| Code | Description |
+|------|-------------|
+| `200` | Success |
+
+#### Examples
+
+```bash
+curl -X GET \
+  https://api.soroscan.io/api/ingest/indexers/{indexer}/rate-limit/ \
+  -H "Content-Type: application/json"
+```
+
+---
+
 ### Redirect explorer requests to the frontend event explorer page.
 
 **Endpoint:** `/api/ingest/contracts/{contract_id}/events/explorer/`  

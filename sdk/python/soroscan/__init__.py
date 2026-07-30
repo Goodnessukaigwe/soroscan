@@ -26,14 +26,17 @@ from soroscan.models import (
     ContractEventTypeInfo,
     ContractStats,
     EventEntry,
+    IndexerRateLimit,
     PaginatedResponse,
     RecordEventsBatchRequest,
     RecordEventsBatchResponse,
+    SetIndexerRateLimitRequest,
+    SetIndexerRateLimitResponse,
     TrackedContract,
     WebhookSubscription,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "SoroScanClient",
     "AsyncSoroScanClient",
@@ -52,6 +55,10 @@ __all__ = [
     "EventEntry",
     "RecordEventsBatchRequest",
     "RecordEventsBatchResponse",
+    # SC-26: Indexer rate limiting
+    "IndexerRateLimit",
+    "SetIndexerRateLimitRequest",
+    "SetIndexerRateLimitResponse",
     "SoroScanError",
     "SoroScanAPIError",
     "SoroScanAuthError",

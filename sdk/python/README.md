@@ -241,6 +241,47 @@ client.delete_webhook(webhook_id: int) -> None
 client.test_webhook(webhook_id: int) -> dict[str, str]
 ```
 
+### Indexer Rate Limits (SC-26)
+
+Admins can cap how many events a given indexer account is allowed to record
+per ledger. This protects the contract and downstream ingestion pipeline from
+a single misbehaving or compromised indexer flooding the system.
+
+#### Set Rate Limit
+```python
+client.set_indexer_rate_limit(
+    indexer: str,
+    max_events_per_ledger: int
+) -> SetIndexerRateLimitResponse
+```
+
+Pass `max_events_per_ledger=0` to clear a previously configured limit and make
+the indexer unrestricted again. Requires an admin-scoped API key.
+
+#### Get Rate Limit
+```python
+client.get_indexer_rate_limit(indexer: str) -> IndexerRateLimit
+```
+
+`IndexerRateLimit.max_events_per_ledger` is `None` when the indexer is
+unrestricted.
+
+```python
+# Cap an indexer to 500 events per ledger
+client.set_indexer_rate_limit(
+    indexer="GABCD...", max_events_per_ledger=500
+)
+
+limit = client.get_indexer_rate_limit("GABCD...")
+print(f"Limit: {limit.max_events_per_ledger}")
+```
+
+CLI equivalent:
+```bash
+soroscan indexers set-rate-limit GABCD... 500
+soroscan indexers get-rate-limit GABCD...
+```
+
 ## Data Models
 
 All response models are Pydantic v2 models with full type safety:

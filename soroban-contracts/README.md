@@ -51,6 +51,28 @@ stored and rejects retries that would otherwise publish a duplicate event.
 The Python and TypeScript SDKs expose this as `record_structured_event` and
 `recordStructuredEvent`; both submit to `POST /api/record/structured/`.
 
+## SC-26 indexer rate limiting
+
+`set_indexer_rate_limit(admin, indexer, max_events_per_ledger)` lets the admin
+cap how many events a given indexer may record in a single ledger. Passing
+`max_events_per_ledger = 0` clears the limit, making the indexer unrestricted
+again. `get_indexer_rate_limit(indexer)` returns the configured limit
+(`None` if unrestricted), and `get_indexer_rate_usage(indexer)` returns the
+number of events the indexer has already recorded in the current ledger.
+
+`record_event` and `record_events_batch` both enforce the limit before
+persisting new events, returning `ContractError::RateLimitExceeded` once an
+indexer's per-ledger quota is exhausted. Usage counters reset automatically
+when the ledger sequence advances.
+
+The Python SDK exposes this as `set_indexer_rate_limit` /
+`get_indexer_rate_limit`, backed by the Django endpoints
+`POST /api/ingest/indexers/rate-limit/` and
+`GET /api/ingest/indexers/<indexer>/rate-limit/`. The TypeScript SDK exposes
+the equivalent `setIndexerRateLimit` / `getIndexerRateLimit` client methods.
+The Python CLI exposes this as `soroscan indexers set-rate-limit` and
+`soroscan indexers get-rate-limit`.
+
 ## Deploying to Testnet
 
 ```bash

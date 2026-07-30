@@ -10,6 +10,52 @@ const INDEXERS_KEY: Symbol = symbol_short!("idxrs");
 const COUNTER_KEY: Symbol = symbol_short!("count");
 const CONTRACT_STATS_KEY: Symbol = symbol_short!("cstats");
 const CONTRACT_EVENT_TYPES_KEY: Symbol = symbol_short!("etypes");
+/// Per-indexer configured rate limits (SC-26).
+const RATE_LIMITS_KEY: Symbol = symbol_short!("ratelim");
+/// Per-indexer current-ledger usage counters (SC-26).
+const RATE_USAGE_KEY: Symbol = symbol_short!("rateuse");
+
+/// Storage keys for structured (SC-38) event records that need a
+/// non-`Symbol` discriminant (correlation IDs are 32 raw bytes).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    /// Look up a structured event by its idempotency/correlation id.
+    StructuredByCorrelation(BytesN<32>),
+    /// Look up the latest structured event recorded for an event type.
+    LatestStructuredByType(Symbol),
+}
+
+/// A versioned, correlation-tagged event record (SC-38).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StructuredEventRecord {
+    /// The contract that emitted the original event.
+    pub contract_id: Address,
+    /// The type/category of the event.
+    pub event_type: Symbol,
+    /// SHA-256 hash of the event payload for verification.
+    pub payload_hash: BytesN<32>,
+    /// Producer-defined schema version for the payload.
+    pub schema_version: u32,
+    /// Idempotency key used to make producer retries safe.
+    pub correlation_id: BytesN<32>,
+    /// Ledger sequence number when recorded.
+    pub ledger: u32,
+    /// Unix timestamp when recorded.
+    pub timestamp: u64,
+}
+
+/// Tracks how many events an indexer has recorded within a given ledger,
+/// used to enforce per-ledger rate limits (SC-26).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitUsage {
+    /// The ledger sequence this usage count applies to.
+    pub ledger: u32,
+    /// Number of events recorded by the indexer in `ledger` so far.
+    pub count: u32,
+}
 
 /// Represents a recorded event from an indexed contract.
 #[contracttype]
@@ -73,6 +119,12 @@ pub enum ContractError {
     InvalidBatchSize = 5,
     /// The indexer is currently paused and cannot record events (SC-10).
     IndexerPaused = 6,
+    /// The provided schema version is invalid (must be >= 1) (SC-38).
+    InvalidSchemaVersion = 7,
+    /// A structured event with this correlation id was already recorded (SC-38).
+    DuplicateCorrelation = 8,
+    /// The indexer has exceeded its configured per-ledger event limit (SC-26).
+    RateLimitExceeded = 9,
 }
 
 #[contract]
@@ -197,11 +249,13 @@ impl SoroScanCore {
             .get(&INDEXERS_KEY)
             .ok_or(ContractError::NotInitialized)?;
 
-        match indexers.get(indexer) {
+        match indexers.get(indexer.clone()) {
             Some(IndexerStatus::Active) => {}
             Some(IndexerStatus::Paused) => return Err(ContractError::IndexerPaused),
             None => return Err(ContractError::IndexerNotFound),
         }
+
+        Self::enforce_rate_limit(&env, &indexer, 1)?;
 
         let ledger = env.ledger().sequence();
         let timestamp = env.ledger().timestamp();
@@ -276,14 +330,19 @@ impl SoroScanCore {
             return Err(ContractError::InvalidSchemaVersion);
         }
 
-        let indexers: Map<Address, bool> = env
+        let indexers: Map<Address, IndexerStatus> = env
             .storage()
             .instance()
             .get(&INDEXERS_KEY)
             .ok_or(ContractError::NotInitialized)?;
-        if !indexers.get(indexer).unwrap_or(false) {
-            return Err(ContractError::IndexerNotFound);
+
+        match indexers.get(indexer.clone()) {
+            Some(IndexerStatus::Active) => {}
+            Some(IndexerStatus::Paused) => return Err(ContractError::IndexerPaused),
+            None => return Err(ContractError::IndexerNotFound),
         }
+
+        Self::enforce_rate_limit(&env, &indexer, 1)?;
 
         let correlation_key = DataKey::StructuredByCorrelation(correlation_id.clone());
         if env.storage().instance().has(&correlation_key) {
@@ -438,6 +497,8 @@ impl SoroScanCore {
             Some(IndexerStatus::Paused) => return Err(ContractError::IndexerPaused),
             None => return Err(ContractError::IndexerNotFound),
         }
+
+        Self::enforce_rate_limit(&env, &indexer, batch_len)?;
 
         let ledger = env.ledger().sequence();
         let timestamp = env.ledger().timestamp();
@@ -639,12 +700,124 @@ impl SoroScanCore {
     pub fn get_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&ADMIN_KEY)
     }
+
+    /// Set (or clear) the maximum number of events an indexer may record
+    /// within a single ledger (SC-26). Admin only.
+    ///
+    /// Passing `max_events_per_ledger == 0` removes any configured limit,
+    /// restoring unlimited (default) throughput for that indexer.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `admin` - The admin address (must match stored admin)
+    /// * `indexer` - The indexer address to configure
+    /// * `max_events_per_ledger` - Max events per ledger, or 0 for unlimited
+    pub fn set_indexer_rate_limit(
+        env: Env,
+        admin: Address,
+        indexer: Address,
+        max_events_per_ledger: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .ok_or(ContractError::NotInitialized)?;
+
+        if admin != stored_admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mut limits: Map<Address, u32> = env
+            .storage()
+            .instance()
+            .get(&RATE_LIMITS_KEY)
+            .unwrap_or(Map::new(&env));
+
+        if max_events_per_ledger == 0 {
+            limits.remove(indexer.clone());
+        } else {
+            limits.set(indexer.clone(), max_events_per_ledger);
+        }
+        env.storage().instance().set(&RATE_LIMITS_KEY, &limits);
+
+        env.events().publish(
+            (symbol_short!("ratelim"), symbol_short!("set")),
+            (indexer, max_events_per_ledger),
+        );
+
+        Ok(())
+    }
+
+    /// Get the configured per-ledger rate limit for an indexer (SC-26).
+    ///
+    /// # Returns
+    /// `Some(limit)` if a limit is configured, `None` if the indexer is
+    /// unrestricted.
+    pub fn get_indexer_rate_limit(env: Env, indexer: Address) -> Option<u32> {
+        let limits: Option<Map<Address, u32>> = env.storage().instance().get(&RATE_LIMITS_KEY);
+        limits.and_then(|m| m.get(indexer))
+    }
+
+    /// Get the number of events an indexer has recorded in the current
+    /// ledger so far (SC-26). Returns 0 if the indexer has not recorded any
+    /// events in the current ledger.
+    pub fn get_indexer_rate_usage(env: Env, indexer: Address) -> u32 {
+        let usage: Option<Map<Address, RateLimitUsage>> =
+            env.storage().instance().get(&RATE_USAGE_KEY);
+        let current_ledger = env.ledger().sequence();
+        match usage.and_then(|m| m.get(indexer)) {
+            Some(u) if u.ledger == current_ledger => u.count,
+            _ => 0,
+        }
+    }
+
+    /// Check and record usage against an indexer's configured rate limit
+    /// (SC-26). No-op if the indexer has no configured limit. Usage counters
+    /// automatically reset when the current ledger changes.
+    fn enforce_rate_limit(env: &Env, indexer: &Address, amount: u32) -> Result<(), ContractError> {
+        let limits: Option<Map<Address, u32>> = env.storage().instance().get(&RATE_LIMITS_KEY);
+        let limit = match limits.and_then(|m| m.get(indexer.clone())) {
+            Some(limit) => limit,
+            None => return Ok(()),
+        };
+
+        let current_ledger = env.ledger().sequence();
+        let mut usage: Map<Address, RateLimitUsage> = env
+            .storage()
+            .instance()
+            .get(&RATE_USAGE_KEY)
+            .unwrap_or(Map::new(env));
+
+        let current_count = match usage.get(indexer.clone()) {
+            Some(u) if u.ledger == current_ledger => u.count,
+            _ => 0,
+        };
+
+        let new_count = current_count.saturating_add(amount);
+        if new_count > limit {
+            return Err(ContractError::RateLimitExceeded);
+        }
+
+        usage.set(
+            indexer.clone(),
+            RateLimitUsage {
+                ledger: current_ledger,
+                count: new_count,
+            },
+        );
+        env.storage().instance().set(&RATE_USAGE_KEY, &usage);
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger};
     use soroban_sdk::Env;
 
     fn setup_contract(env: &Env) -> (SoroScanCoreClient<'_>, Address, Address) {
@@ -1365,5 +1538,209 @@ mod tests {
             &BytesN::from_array(&env, &[0u8; 32]),
         );
         assert_eq!(count, 1);
+    }
+
+    // ── SC-26: indexer rate limiting ────────────────────────────────────────
+
+    #[test]
+    fn test_set_and_get_indexer_rate_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        client.add_indexer(&admin, &indexer);
+
+        assert_eq!(client.get_indexer_rate_limit(&indexer), None);
+
+        client.set_indexer_rate_limit(&admin, &indexer, &5);
+        assert_eq!(client.get_indexer_rate_limit(&indexer), Some(5));
+
+        // 0 clears the limit again.
+        client.set_indexer_rate_limit(&admin, &indexer, &0);
+        assert_eq!(client.get_indexer_rate_limit(&indexer), None);
+    }
+
+    #[test]
+    fn test_set_indexer_rate_limit_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let non_admin = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        let result = client.try_set_indexer_rate_limit(&non_admin, &indexer, &5);
+        assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_unlimited_indexer_can_record_freely() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+
+        for i in 0..10 {
+            client.record_event(
+                &indexer,
+                &target,
+                &symbol_short!("swap"),
+                &BytesN::from_array(&env, &[i as u8; 32]),
+            );
+        }
+        assert_eq!(client.total_events(), 10);
+    }
+
+    #[test]
+    fn test_rate_limited_indexer_blocked_after_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+        client.set_indexer_rate_limit(&admin, &indexer, &2);
+
+        client.record_event(
+            &indexer,
+            &target,
+            &symbol_short!("a"),
+            &BytesN::from_array(&env, &[1u8; 32]),
+        );
+        client.record_event(
+            &indexer,
+            &target,
+            &symbol_short!("b"),
+            &BytesN::from_array(&env, &[2u8; 32]),
+        );
+        assert_eq!(client.get_indexer_rate_usage(&indexer), 2);
+
+        let result = client.try_record_event(
+            &indexer,
+            &target,
+            &symbol_short!("c"),
+            &BytesN::from_array(&env, &[3u8; 32]),
+        );
+        assert_eq!(result, Err(Ok(ContractError::RateLimitExceeded)));
+        assert_eq!(client.total_events(), 2);
+    }
+
+    #[test]
+    fn test_rate_limit_resets_on_new_ledger() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+        client.set_indexer_rate_limit(&admin, &indexer, &1);
+
+        client.record_event(
+            &indexer,
+            &target,
+            &symbol_short!("a"),
+            &BytesN::from_array(&env, &[1u8; 32]),
+        );
+        let blocked = client.try_record_event(
+            &indexer,
+            &target,
+            &symbol_short!("b"),
+            &BytesN::from_array(&env, &[2u8; 32]),
+        );
+        assert_eq!(blocked, Err(Ok(ContractError::RateLimitExceeded)));
+
+        // Advance to the next ledger; usage should reset.
+        let next_ledger = env.ledger().sequence() + 1;
+        env.ledger().set_sequence_number(next_ledger);
+
+        let count = client.record_event(
+            &indexer,
+            &target,
+            &symbol_short!("c"),
+            &BytesN::from_array(&env, &[3u8; 32]),
+        );
+        assert_eq!(count, 2);
+        assert_eq!(client.get_indexer_rate_usage(&indexer), 1);
+    }
+
+    #[test]
+    fn test_rate_limit_enforced_on_batch() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, SoroScanCore);
+        let client = SoroScanCoreClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let indexer = Address::generate(&env);
+        client.init(&admin);
+        client.add_indexer(&admin, &indexer);
+        client.set_indexer_rate_limit(&admin, &indexer, &2);
+
+        let mut entries = Vec::new(&env);
+        for i in 0..3 {
+            entries.push_back(EventEntry {
+                contract_id: Address::generate(&env),
+                event_type: symbol_short!("ev"),
+                payload_hash: BytesN::from_array(&env, &[i as u8; 32]),
+            });
+        }
+
+        // Batch of 3 exceeds the limit of 2; nothing should be recorded.
+        let result = client.try_record_events_batch(&indexer, &entries);
+        assert_eq!(result, Err(Ok(ContractError::RateLimitExceeded)));
+        assert_eq!(client.total_events(), 0);
+
+        // A batch within the limit succeeds.
+        let mut small_batch = Vec::new(&env);
+        small_batch.push_back(EventEntry {
+            contract_id: Address::generate(&env),
+            event_type: symbol_short!("ev"),
+            payload_hash: BytesN::from_array(&env, &[9u8; 32]),
+        });
+        let count = client.record_events_batch(&indexer, &small_batch);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_get_indexer_rate_usage_defaults_to_zero() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _admin, indexer) = setup_contract(&env);
+        assert_eq!(client.get_indexer_rate_usage(&indexer), 0);
+    }
+
+    #[test]
+    fn test_rate_limit_enforced_on_structured_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        client.add_indexer(&admin, &indexer);
+        client.set_indexer_rate_limit(&admin, &indexer, &1);
+
+        client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("xfer"),
+            &BytesN::from_array(&env, &[1u8; 32]),
+            &1u32,
+            &BytesN::from_array(&env, &[9u8; 32]),
+        );
+
+        let blocked = client.try_record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("xfer"),
+            &BytesN::from_array(&env, &[2u8; 32]),
+            &1u32,
+            &BytesN::from_array(&env, &[8u8; 32]),
+        );
+        assert_eq!(blocked, Err(Ok(ContractError::RateLimitExceeded)));
+        assert_eq!(client.total_events(), 1);
     }
 }

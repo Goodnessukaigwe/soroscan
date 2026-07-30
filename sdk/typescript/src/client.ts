@@ -25,6 +25,9 @@ import type {
   PaginatedResponse,
   RecordEventsBatchParams,
   RecordEventsBatchResponse,
+  SetIndexerRateLimitParams,
+  SetIndexerRateLimitResponse,
+  IndexerRateLimit,
 } from "./types.js";
 import { EventQueryBuilder, ContractQueryBuilder } from "./builder.js";
 
@@ -349,6 +352,43 @@ export class SoroScanClient {
       "POST",
       "/v1/record-events-batch",
       { body: params }
+    );
+  }
+
+  // ─── Indexer rate limits (SC-26) ───────────────────────────────────────────
+
+  /**
+   * Set (or clear) the maximum number of events an indexer may record per
+   * ledger. Requires admin privileges. Pass `maxEventsPerLedger: 0` to clear
+   * an existing limit and make the indexer unrestricted again.
+   *
+   * @example
+   * await client.setIndexerRateLimit({
+   *   indexer: 'GABC...',
+   *   maxEventsPerLedger: 100,
+   * });
+   */
+  async setIndexerRateLimit(
+    params: SetIndexerRateLimitParams
+  ): Promise<SetIndexerRateLimitResponse> {
+    return this.#request<SetIndexerRateLimitResponse>(
+      "POST",
+      "/v1/indexers/rate-limit",
+      { body: params }
+    );
+  }
+
+  /**
+   * Get the currently configured rate limit for an indexer.
+   * `maxEventsPerLedger` is `null` when the indexer is unrestricted.
+   *
+   * @example
+   * const limit = await client.getIndexerRateLimit('GABC...');
+   */
+  async getIndexerRateLimit(indexer: string): Promise<IndexerRateLimit> {
+    return this.#request<IndexerRateLimit>(
+      "GET",
+      `/v1/indexers/${encodeURIComponent(indexer)}/rate-limit`
     );
   }
 

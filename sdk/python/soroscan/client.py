@@ -22,11 +22,14 @@ from soroscan.models import (
     ContractEventTypeInfo,
     ContractStats,
     EventEntry,
+    IndexerRateLimit,
     PaginatedResponse,
     RecordEventRequest,
     RecordEventResponse,
     RecordEventsBatchRequest,
     RecordEventsBatchResponse,
+    SetIndexerRateLimitRequest,
+    SetIndexerRateLimitResponse,
     TrackedContract,
     WebhookSubscription,
 )
@@ -435,6 +438,46 @@ class SoroScanClient:
         )
         data = self._handle_response(response)
         return RecordEventsBatchResponse.model_validate(data)
+
+    def set_indexer_rate_limit(
+        self,
+        indexer: str,
+        max_events_per_ledger: int,
+    ) -> SetIndexerRateLimitResponse:
+        """
+        Configure the maximum number of events an indexer may record per
+        ledger (SC-26). Admin-only operation.
+
+        Args:
+            indexer: Indexer Stellar account address (G...)
+            max_events_per_ledger: Max events per ledger; 0 clears the limit
+
+        Returns:
+            Submission result
+        """
+        url = urljoin(self.base_url, "/api/ingest/indexers/rate-limit/")
+        request = SetIndexerRateLimitRequest(
+            indexer=indexer,
+            max_events_per_ledger=max_events_per_ledger,
+        )
+        response = self._client.post(url, headers=self._get_headers(), json=request.model_dump())
+        data = self._handle_response(response)
+        return SetIndexerRateLimitResponse.model_validate(data)
+
+    def get_indexer_rate_limit(self, indexer: str) -> IndexerRateLimit:
+        """
+        Get the configured per-ledger rate limit for an indexer (SC-26).
+
+        Args:
+            indexer: Indexer Stellar account address (G...)
+
+        Returns:
+            The configured limit, or None if the indexer is unrestricted
+        """
+        url = urljoin(self.base_url, f"/api/ingest/indexers/{indexer}/rate-limit/")
+        response = self._client.get(url, headers=self._get_headers())
+        data = self._handle_response(response)
+        return IndexerRateLimit.model_validate(data)
 
     def get_webhooks(
         self,
@@ -959,6 +1002,48 @@ class AsyncSoroScanClient:
         )
         data = self._handle_response(response)
         return RecordEventsBatchResponse.model_validate(data)
+
+    async def set_indexer_rate_limit(
+        self,
+        indexer: str,
+        max_events_per_ledger: int,
+    ) -> SetIndexerRateLimitResponse:
+        """
+        Configure the maximum number of events an indexer may record per
+        ledger (SC-26). Admin-only operation.
+
+        Args:
+            indexer: Indexer Stellar account address (G...)
+            max_events_per_ledger: Max events per ledger; 0 clears the limit
+
+        Returns:
+            Submission result
+        """
+        url = urljoin(self.base_url, "/api/ingest/indexers/rate-limit/")
+        request = SetIndexerRateLimitRequest(
+            indexer=indexer,
+            max_events_per_ledger=max_events_per_ledger,
+        )
+        response = await self._client.post(
+            url, headers=self._get_headers(), json=request.model_dump()
+        )
+        data = self._handle_response(response)
+        return SetIndexerRateLimitResponse.model_validate(data)
+
+    async def get_indexer_rate_limit(self, indexer: str) -> IndexerRateLimit:
+        """
+        Get the configured per-ledger rate limit for an indexer (SC-26).
+
+        Args:
+            indexer: Indexer Stellar account address (G...)
+
+        Returns:
+            The configured limit, or None if the indexer is unrestricted
+        """
+        url = urljoin(self.base_url, f"/api/ingest/indexers/{indexer}/rate-limit/")
+        response = await self._client.get(url, headers=self._get_headers())
+        data = self._handle_response(response)
+        return IndexerRateLimit.model_validate(data)
 
     async def get_webhooks(
         self,

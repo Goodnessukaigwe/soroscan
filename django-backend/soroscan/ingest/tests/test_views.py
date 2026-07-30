@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import responses
@@ -402,6 +402,95 @@ class TestRecordEventView:
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "contract_id" in response.data
+
+
+@pytest.mark.django_db
+class TestIndexerRateLimitViews:
+    """SC-26: indexer rate limit configuration and lookup endpoints."""
+
+    @pytest.fixture(autouse=True)
+    def setup_throttle_rates(self, settings):
+        if 'DEFAULT_THROTTLE_RATES' not in settings.REST_FRAMEWORK:
+            settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {}
+        settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'].update({
+            'anon': '1000/hour',
+            'user': '10000/hour',
+            'ingest': '100/hour',
+            'graphql': '500/hour',
+        })
+
+    def test_set_indexer_rate_limit_success(self, authenticated_client):
+        with patch("soroscan.ingest.views.SorobanClient") as mock_client_cls:
+            mock_client = mock_client_cls.return_value
+            mock_client.set_indexer_rate_limit.return_value = MagicMock(
+                success=True, tx_hash="tx123", status="PENDING", error=None
+            )
+
+            url = reverse("set-indexer-rate-limit")
+            data = {
+                "indexer": "G" + "A" * 55,
+                "max_events_per_ledger": 100,
+            }
+            response = authenticated_client.post(url, data, format="json")
+
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        assert response.data["status"] == "submitted"
+        assert response.data["tx_hash"] == "tx123"
+        mock_client.set_indexer_rate_limit.assert_called_once_with(
+            indexer_address="G" + "A" * 55,
+            max_events_per_ledger=100,
+        )
+
+    def test_set_indexer_rate_limit_failure(self, authenticated_client):
+        with patch("soroscan.ingest.views.SorobanClient") as mock_client_cls:
+            mock_client = mock_client_cls.return_value
+            mock_client.set_indexer_rate_limit.return_value = MagicMock(
+                success=False, tx_hash="", status="error", error="No keypair configured"
+            )
+
+            url = reverse("set-indexer-rate-limit")
+            data = {"indexer": "G" + "A" * 55, "max_events_per_ledger": 10}
+            response = authenticated_client.post(url, data, format="json")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["status"] == "failed"
+
+    def test_set_indexer_rate_limit_validation_error(self, authenticated_client):
+        url = reverse("set-indexer-rate-limit")
+        response = authenticated_client.post(url, {"indexer": "GABC"}, format="json")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "max_events_per_ledger" in response.data
+
+    def test_set_indexer_rate_limit_requires_auth(self, api_client):
+        url = reverse("set-indexer-rate-limit")
+        response = api_client.post(
+            url, {"indexer": "G" + "A" * 55, "max_events_per_ledger": 10}, format="json"
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_get_indexer_rate_limit(self, api_client):
+        indexer = "G" + "A" * 55
+        with patch("soroscan.ingest.views.SorobanClient") as mock_client_cls:
+            mock_client_cls.return_value.get_indexer_rate_limit.return_value = 50
+
+            url = reverse("indexer-rate-limit", args=[indexer])
+            response = api_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["indexer"] == indexer
+        assert response.data["max_events_per_ledger"] == 50
+
+    def test_get_indexer_rate_limit_unrestricted(self, api_client):
+        indexer = "G" + "B" * 55
+        with patch("soroscan.ingest.views.SorobanClient") as mock_client_cls:
+            mock_client_cls.return_value.get_indexer_rate_limit.return_value = None
+
+            url = reverse("indexer-rate-limit", args=[indexer])
+            response = api_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["max_events_per_ledger"] is None
 
 
 @pytest.mark.django_db

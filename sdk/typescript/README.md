@@ -225,6 +225,33 @@ await client.updateWebhook("wh_001", { status: "paused" });
 
 Permanently deletes a webhook.
 
+### Indexer Rate Limits (SC-26)
+
+Admins can cap how many events a given indexer account may record per ledger,
+protecting the contract and ingestion pipeline from a misbehaving indexer.
+
+#### `client.setIndexerRateLimit(params)`
+
+Sets (or clears) an indexer's per-ledger event limit. Requires admin
+privileges. Pass `maxEventsPerLedger: 0` to clear an existing limit.
+
+```ts
+await client.setIndexerRateLimit({
+  indexer: "GABCD...",
+  maxEventsPerLedger: 500,
+});
+```
+
+#### `client.getIndexerRateLimit(indexer)`
+
+Returns the currently configured rate limit for an indexer.
+`maxEventsPerLedger` is `null` when the indexer is unrestricted.
+
+```ts
+const limit = await client.getIndexerRateLimit("GABCD...");
+console.log("Limit:", limit.maxEventsPerLedger);
+```
+
 ---
 
 ## Error Handling

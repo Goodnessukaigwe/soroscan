@@ -59,6 +59,10 @@ export type {
   EventEntry,
   RecordEventsBatchParams,
   RecordEventsBatchResponse,
+  // SC-26: Indexer rate limiting
+  SetIndexerRateLimitParams,
+  SetIndexerRateLimitResponse,
+  IndexerRateLimit,
   // WebSocket
   WebSocketClientConfig,
   EventCallback,

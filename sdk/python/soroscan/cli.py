@@ -145,6 +145,31 @@ def _handle_record_event(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_indexers(args: argparse.Namespace) -> int:
+    """Manage indexer per-ledger rate limits (SC-26)."""
+    with _build_client(args) as client:
+        if args.indexer_command == "set-rate-limit":
+            result = client.set_indexer_rate_limit(
+                indexer=args.indexer,
+                max_events_per_ledger=args.max_events_per_ledger,
+            )
+            if args.output == "json":
+                _print_json(result)
+            else:
+                _print_table([result], ["status", "tx_hash", "transaction_status", "error"])
+            return 0
+
+        if args.indexer_command == "get-rate-limit":
+            result = client.get_indexer_rate_limit(indexer=args.indexer)
+            if args.output == "json":
+                _print_json(result)
+            else:
+                _print_table([result], ["indexer", "max_events_per_ledger"])
+            return 0
+
+        raise SoroScanError(f"Unknown indexer command: {args.indexer_command}")
+
+
 def _handle_webhooks(args: argparse.Namespace) -> int:
     with _build_client(args) as client:
         if args.webhook_command == "test":
@@ -238,6 +263,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     record.add_argument("--output", choices=["table", "json"], default="table")
     record.set_defaults(func=_handle_record_event)
+
+    # SC-26: indexer per-ledger rate limiting
+    indexers = subcommands.add_parser("indexers", help="Manage indexer rate limits (SC-26)")
+    indexer_subcommands = indexers.add_subparsers(dest="indexer_command", required=True)
+
+    indexers_set = indexer_subcommands.add_parser(
+        "set-rate-limit", help="Configure an indexer's max events per ledger (admin only)"
+    )
+    indexers_set.add_argument("indexer", help="Indexer Stellar account address (G...)")
+    indexers_set.add_argument(
+        "max_events_per_ledger",
+        type=int,
+        help="Maximum events per ledger; 0 clears the limit (unlimited)",
+    )
+    indexers_set.add_argument("--output", choices=["table", "json"], default="table")
+    indexers_set.set_defaults(func=_handle_indexers)
+
+    indexers_get = indexer_subcommands.add_parser(
+        "get-rate-limit", help="Get an indexer's configured rate limit"
+    )
+    indexers_get.add_argument("indexer", help="Indexer Stellar account address (G...)")
+    indexers_get.add_argument("--output", choices=["table", "json"], default="table")
+    indexers_get.set_defaults(func=_handle_indexers)
 
     return parser
 

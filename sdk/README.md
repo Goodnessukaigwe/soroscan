@@ -15,6 +15,23 @@ client.record_structured_event(contract_id, "transfer", payload_hash, 1, correla
 await client.recordStructuredEvent({ contractId, eventType: "transfer", payloadHash, schemaVersion: 1, correlationId });
 ```
 
+## SC-26 indexer rate limits
+
+SC-26 lets admins cap how many events an indexer may record per ledger.
+`max_events_per_ledger = 0` clears the limit (unlimited). Both SDKs expose
+set/get helpers backed by `POST /api/ingest/indexers/rate-limit/` and
+`GET /api/ingest/indexers/<indexer>/rate-limit/`.
+
+```python
+client.set_indexer_rate_limit(indexer="GABC...", max_events_per_ledger=500)
+limit = client.get_indexer_rate_limit("GABC...")
+```
+
+```ts
+await client.setIndexerRateLimit({ indexer: "GABC...", maxEventsPerLedger: 500 });
+const limit = await client.getIndexerRateLimit("GABC...");
+```
+
 Official SDKs for the SoroScan API - Stellar/Soroban event indexing.
 
 ## Strict type verification

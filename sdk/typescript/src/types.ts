@@ -377,6 +377,31 @@ export interface RecordEventsBatchResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SC-26: Indexer rate limiting
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SetIndexerRateLimitParams {
+  /** Indexer Stellar account address (G...) */
+  indexer: string;
+  /** Maximum events per ledger; 0 clears the limit (unlimited) */
+  maxEventsPerLedger: number;
+}
+
+export interface SetIndexerRateLimitResponse {
+  status: string;
+  txHash: string | null;
+  transactionStatus: string | null;
+  error: string | null;
+}
+
+export interface IndexerRateLimit {
+  /** Indexer Stellar account address */
+  indexer: string;
+  /** Configured limit, or null if the indexer is unrestricted */
+  maxEventsPerLedger: number | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // WebSocket
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -126,3 +126,32 @@ class RecordEventsBatchResponse(BaseModel):
     tx_hash: str | None = Field(None, description="Transaction hash")
     transaction_status: str | None = Field(None, description="Transaction status")
     error: str | None = Field(None, description="Error message if failed")
+
+
+# ── SC-26: Indexer rate limiting ──────────────────────────────────────────────
+
+class SetIndexerRateLimitRequest(BaseModel):
+    """Request model for configuring a per-indexer event rate limit (SC-26)."""
+
+    indexer: str = Field(..., max_length=56, description="Indexer Stellar account address (G...)")
+    max_events_per_ledger: int = Field(
+        ..., ge=0, description="Max events per ledger; 0 clears the limit (unlimited)"
+    )
+
+
+class SetIndexerRateLimitResponse(BaseModel):
+    """Response from configuring an indexer rate limit (SC-26)."""
+
+    status: str = Field(..., description="Submission status")
+    tx_hash: str | None = Field(None, description="Transaction hash")
+    transaction_status: str | None = Field(None, description="Transaction status")
+    error: str | None = Field(None, description="Error message if failed")
+
+
+class IndexerRateLimit(BaseModel):
+    """The configured rate limit for an indexer (SC-26)."""
+
+    indexer: str = Field(..., description="Indexer Stellar account address")
+    max_events_per_ledger: int | None = Field(
+        None, description="Configured limit, or None if the indexer is unrestricted"
+    )

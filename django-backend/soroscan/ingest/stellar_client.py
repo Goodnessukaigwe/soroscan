@@ -295,6 +295,116 @@ class SorobanClient:
             logger.exception("Failed to record SC-38 structured event")
             return TransactionResult(False, "", "error", error=str(e))
 
+    def set_indexer_rate_limit(
+        self,
+        indexer_address: str,
+        max_events_per_ledger: int,
+    ) -> TransactionResult:
+        """
+        Submit a set_indexer_rate_limit transaction to the SoroScan contract (SC-26).
+
+        Args:
+            indexer_address: The indexer address to configure
+            max_events_per_ledger: Maximum events per ledger, or 0 to clear the limit
+
+        Returns:
+            TransactionResult with status and hash
+        """
+        if not self.keypair:
+            return TransactionResult(
+                success=False,
+                tx_hash="",
+                status="error",
+                error="No keypair configured",
+            )
+
+        try:
+            account = self.server.load_account(self.keypair.public_key)
+
+            tx = (
+                TransactionBuilder(
+                    source_account=account,
+                    network_passphrase=self.network_passphrase,
+                    base_fee=100000,
+                )
+                .append_invoke_contract_function_op(
+                    contract_id=self.contract_id,
+                    function_name="set_indexer_rate_limit",
+                    parameters=[
+                        self._address_to_sc_val(self.keypair.public_key),  # admin
+                        self._address_to_sc_val(indexer_address),  # indexer
+                        SCVal(type=SCValType.SCV_U32, u32=max_events_per_ledger),
+                    ],
+                )
+                .set_timeout(30)
+                .build()
+            )
+
+            simulate_response = self.server.simulate_transaction(tx)
+            if simulate_response.error:
+                return TransactionResult(
+                    success=False,
+                    tx_hash="",
+                    status="simulation_failed",
+                    error=simulate_response.error,
+                )
+
+            prepared_tx = self.server.prepare_transaction(tx, simulate_response)
+            prepared_tx.sign(self.keypair)
+            send_response = self.server.send_transaction(prepared_tx)
+
+            return TransactionResult(
+                success=send_response.status == "PENDING",
+                tx_hash=send_response.hash,
+                status=send_response.status,
+                result_xdr=getattr(send_response, "result_xdr", None),
+            )
+        except Exception as e:
+            logger.exception(
+                "Failed to set indexer rate limit",
+                extra={"indexer": indexer_address},
+            )
+            return TransactionResult(False, "", "error", error=str(e))
+
+    def get_indexer_rate_limit(self, indexer_address: str) -> Optional[int]:
+        """
+        Query the get_indexer_rate_limit function on the contract (SC-26).
+
+        Returns:
+            The configured limit, or None if unrestricted / on error.
+        """
+        try:
+            account = self.server.load_account(self.keypair.public_key)
+
+            tx_builder = TransactionBuilder(
+                source_account=account,
+                network_passphrase=self.network_passphrase,
+                base_fee=100,
+            )
+            tx_builder.append_invoke_contract_function_op(
+                contract_id=self.contract_id,
+                function_name="get_indexer_rate_limit",
+                parameters=[self._address_to_sc_val(indexer_address)],
+            )
+            tx = tx_builder.set_timeout(30).build()
+            simulate_response = self.server.simulate_transaction(tx)
+
+            if simulate_response.error or not simulate_response.results:
+                return None
+
+            from stellar_sdk import scval, xdr as stellar_xdr
+
+            result_scval = stellar_xdr.SCVal.from_xdr(simulate_response.results[0].xdr)
+            if result_scval.type == SCValType.SCV_VOID:
+                return None
+            return scval.to_uint32(result_scval)
+        except Exception:
+            logger.exception(
+                "Failed to get indexer rate limit",
+                extra={"indexer": indexer_address},
+            )
+            return None
+
     def get_total_events(self) -> Optional[int]:
         """
         Query the total_events function on the contract.

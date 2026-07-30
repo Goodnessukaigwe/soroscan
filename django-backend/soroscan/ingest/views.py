@@ -67,6 +67,7 @@ from .serializers import (
     OrganizationCorsSerializer,
     OrganizationCostSnapshotSerializer,
     RecordEventRequestSerializer,
+    SetIndexerRateLimitRequestSerializer,
     StructuredEventRequestSerializer,
     TeamMemberAddSerializer,
     TeamSerializer,
@@ -1060,6 +1061,88 @@ def record_structured_event_view(request):
         {"status": "failed", "error": result.error, "transaction_status": result.status},
         status=status.HTTP_400_BAD_REQUEST,
     )
+
+
+@extend_schema(
+    request=SetIndexerRateLimitRequestSerializer,
+    responses={
+        202: inline_serializer(
+            name="SetIndexerRateLimitAccepted",
+            fields={
+                "status": serializers.CharField(),
+                "tx_hash": serializers.CharField(),
+                "transaction_status": serializers.CharField(),
+            },
+        ),
+        400: inline_serializer(
+            name="SetIndexerRateLimitError",
+            fields={
+                "status": serializers.CharField(),
+                "error": serializers.CharField(),
+            },
+        ),
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([IngestRateThrottle, AnonRateThrottle, UserRateThrottle])
+def set_indexer_rate_limit_view(request):
+    """
+    Configure the maximum number of events an indexer may record per ledger (SC-26).
+
+    Request body:
+    {
+        "indexer": "GABC...",
+        "max_events_per_ledger": 100  // 0 clears the limit
+    }
+    """
+    serializer = SetIndexerRateLimitRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    data = serializer.validated_data
+    result = SorobanClient().set_indexer_rate_limit(
+        indexer_address=data["indexer"],
+        max_events_per_ledger=data["max_events_per_ledger"],
+    )
+    if result.success:
+        return Response(
+            {
+                "status": "submitted",
+                "tx_hash": result.tx_hash,
+                "transaction_status": result.status,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+    return Response(
+        {"status": "failed", "error": result.error, "transaction_status": result.status},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@extend_schema(
+    parameters=[
+        OpenApiParameter(
+            name="indexer",
+            type=str,
+            location=OpenApiParameter.PATH,
+            description="Indexer Stellar account address (G...)",
+        ),
+    ],
+    responses=inline_serializer(
+        name="IndexerRateLimitResponse",
+        fields={
+            "indexer": serializers.CharField(),
+            "max_events_per_ledger": serializers.IntegerField(allow_null=True),
+        },
+    ),
+)
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def indexer_rate_limit_view(request, indexer: str):
+    """Get the configured per-ledger rate limit for an indexer (SC-26). `null` means unlimited."""
+    limit = SorobanClient().get_indexer_rate_limit(indexer_address=indexer)
+    return Response({"indexer": indexer, "max_events_per_ledger": limit})
 
 
 @extend_schema(

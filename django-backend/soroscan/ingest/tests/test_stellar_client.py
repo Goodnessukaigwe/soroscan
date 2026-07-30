@@ -177,3 +177,84 @@ class TestSorobanClient:
         result = client.get_total_events()
 
         assert result is None
+
+    # ── SC-26: indexer rate limiting ─────────────────────────────────────────
+
+    def test_set_indexer_rate_limit_no_keypair(self, valid_contract_id, valid_keypair):
+        client = SorobanClient(secret_key=None, contract_id=valid_contract_id)
+        result = client.set_indexer_rate_limit(
+            indexer_address=valid_keypair.public_key,
+            max_events_per_ledger=10,
+        )
+
+        assert result.success is False
+        assert result.error == "No keypair configured"
+
+    def test_set_indexer_rate_limit_success(self, client, valid_keypair):
+        mock_account = MagicMock()
+        mock_account.sequence = 1
+
+        mock_simulate_response = MagicMock()
+        mock_simulate_response.error = None
+
+        mock_send_response = MagicMock()
+        mock_send_response.status = "PENDING"
+        mock_send_response.hash = "tx456"
+
+        client.server = MagicMock()
+        client.server.load_account.return_value = mock_account
+        client.server.simulate_transaction.return_value = mock_simulate_response
+        client.server.prepare_transaction.return_value = MagicMock()
+        client.server.send_transaction.return_value = mock_send_response
+
+        result = client.set_indexer_rate_limit(
+            indexer_address=valid_keypair.public_key,
+            max_events_per_ledger=25,
+        )
+
+        assert result.success is True
+        assert result.tx_hash == "tx456"
+        assert result.status == "PENDING"
+
+    def test_set_indexer_rate_limit_simulation_failed(self, client, valid_keypair):
+        mock_account = MagicMock()
+        mock_account.sequence = 1
+
+        mock_simulate_response = MagicMock()
+        mock_simulate_response.error = "Simulation error"
+
+        client.server = MagicMock()
+        client.server.load_account.return_value = mock_account
+        client.server.simulate_transaction.return_value = mock_simulate_response
+
+        result = client.set_indexer_rate_limit(
+            indexer_address=valid_keypair.public_key,
+            max_events_per_ledger=25,
+        )
+
+        assert result.success is False
+        assert result.status == "simulation_failed"
+
+    def test_get_indexer_rate_limit_error_returns_none(self, client, valid_keypair):
+        client.server = MagicMock()
+        client.server.load_account.side_effect = Exception("Network error")
+
+        result = client.get_indexer_rate_limit(indexer_address=valid_keypair.public_key)
+
+        assert result is None
+
+    def test_get_indexer_rate_limit_no_results_returns_none(self, client, valid_keypair):
+        mock_account = MagicMock()
+        mock_account.sequence = 1
+
+        mock_simulate_response = MagicMock()
+        mock_simulate_response.error = None
+        mock_simulate_response.results = []
+
+        client.server = MagicMock()
+        client.server.load_account.return_value = mock_account
+        client.server.simulate_transaction.return_value = mock_simulate_response
+
+        result = client.get_indexer_rate_limit(indexer_address=valid_keypair.public_key)
+
+        assert result is None

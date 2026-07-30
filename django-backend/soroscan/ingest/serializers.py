@@ -578,6 +578,19 @@ class StructuredEventRequestSerializer(RecordEventRequestSerializer):
     )
 
 
+class SetIndexerRateLimitRequestSerializer(serializers.Serializer):
+    """SC-26 request payload for configuring a per-indexer event rate limit."""
+
+    indexer = serializers.CharField(
+        max_length=56,
+        help_text="Stellar account address (G...) of the indexer to configure",
+    )
+    max_events_per_ledger = serializers.IntegerField(
+        min_value=0,
+        help_text="Maximum events the indexer may record per ledger. 0 clears the limit (unlimited).",
+    )
+
+
 class APIKeySerializer(serializers.ModelSerializer):
     """
     Serializer for APIKey model.
