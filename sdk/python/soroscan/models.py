@@ -126,3 +126,9 @@ class RecordEventsBatchResponse(BaseModel):
     tx_hash: str | None = Field(None, description="Transaction hash")
     transaction_status: str | None = Field(None, description="Transaction status")
     error: str | None = Field(None, description="Error message if failed")
+
+
+# ── SC-30: Recent contract events ──────────────────────────────────────────────
+
+MAX_RECENT_EVENTS_LIMIT = 20
+"""Maximum number of events that can be requested from ``get_contract_recent_events``."""

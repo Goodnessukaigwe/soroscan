@@ -504,6 +504,37 @@ curl -X GET \
 
 ---
 
+### Get the most recent events for a specific contract, newest first (SC-30).
+
+**Endpoint:** `/api/ingest/contracts/{contract_id}/recent-events/`  
+**Methods:** `GET`  
+**Auth required:** 🔓 No  
+
+Mirrors the bounded on-chain recent-events ring buffer exposed by the
+SoroScan core contract's `recent_events` function, backed here by the
+indexed event history for richer payload data. Accepts an optional
+`limit` query parameter (1-20, default 10).
+
+#### Response Codes
+
+| Code | Description |
+|------|-------------|
+| `200` | Success |
+| `400` | Invalid `limit` parameter |
+| `404` | Contract not found |
+
+#### Examples
+
+```bash
+curl -X GET \
+  "https://api.soroscan.io/api/ingest/contracts/{contract_id}/recent-events/?limit=10" \
+  -H "Content-Type: application/json"
+```
+
+> Replace path parameters and supply a valid JWT in the Authorization header.
+
+---
+
 ### Redirect explorer requests to the frontend event explorer page.
 
 **Endpoint:** `/api/ingest/contracts/{contract_id}/events/explorer/`  

@@ -1,7 +1,9 @@
 import type {
   SoroScanClientConfig,
   SoroScanApiError,
+  ContractEvent,
   ContractEventTypeInfo,
+  GetContractRecentEventsParams,
   GetEventsParams,
   GetEventsResponse,
   GetEventsByContractsParams,
@@ -26,6 +28,7 @@ import type {
   RecordEventsBatchParams,
   RecordEventsBatchResponse,
 } from "./types.js";
+import { MAX_RECENT_EVENTS_LIMIT } from "./types.js";
 import { EventQueryBuilder, ContractQueryBuilder } from "./builder.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -270,6 +273,31 @@ export class SoroScanClient {
     return this.#request<ContractEventTypeInfo[]>(
       "GET",
       `/v1/contracts/${encodeURIComponent(contractId)}/event-types`
+    );
+  }
+
+  /**
+   * Get the most recent events for a specific contract, newest first (SC-30).
+   *
+   * @example
+   * const events = await client.getContractRecentEvents({
+   *   contractId: 'CCAAA...',
+   *   limit: 5,
+   * });
+   */
+  async getContractRecentEvents(
+    params: GetContractRecentEventsParams
+  ): Promise<ContractEvent[]> {
+    const { contractId, limit = 10 } = params;
+    if (limit < 1 || limit > MAX_RECENT_EVENTS_LIMIT) {
+      throw new Error(
+        `getContractRecentEvents: limit must be between 1 and ${MAX_RECENT_EVENTS_LIMIT}`
+      );
+    }
+    return this.#request<ContractEvent[]>(
+      "GET",
+      `/v1/contracts/${encodeURIComponent(contractId)}/recent-events`,
+      { query: { limit } }
     );
   }
 

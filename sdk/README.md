@@ -1,5 +1,24 @@
 # SoroScan SDKs
 
+## SC-30 recent contract events
+
+Fetch the most recently recorded events for a contract, newest first (max 20
+per request):
+
+```python
+events = client.get_contract_recent_events(contract_id, limit=10)
+```
+
+```ts
+const events = await client.getContractRecentEvents({ contractId, limit: 10 });
+```
+
+CLI:
+
+```bash
+soroscan contracts recent-events <contract_id> --limit 10
+```
+
 ## SC-38 structured events
 
 SC-38 adds a versioned, retry-safe event submission path. Provide a SHA-256

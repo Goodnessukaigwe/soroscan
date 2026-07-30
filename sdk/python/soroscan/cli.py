@@ -115,6 +115,17 @@ def _handle_contracts(args: argparse.Namespace) -> int:
                 )
             return 0
 
+        if args.contract_command == "recent-events":
+            events = client.get_contract_recent_events(args.contract_id, limit=args.limit)
+            if args.output == "json":
+                _print_json(events)
+            else:
+                _print_table(
+                    events,
+                    ["id", "event_type", "ledger", "event_index", "timestamp"],
+                )
+            return 0
+
         response = client.get_contracts(
             is_active=args.active,
             search=args.search,
@@ -224,6 +235,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--output", choices=["table", "json"], default="table"
     )
     contracts_event_types.set_defaults(func=_handle_contracts)
+    contracts_recent_events = contract_subcommands.add_parser(
+        "recent-events", help="Get the most recent events for a contract (SC-30)"
+    )
+    contracts_recent_events.add_argument("contract_id", help="Contract address (C...)")
+    contracts_recent_events.add_argument(
+        "--limit", type=int, default=10, help="Maximum events to return (1-20, default 10)"
+    )
+    contracts_recent_events.add_argument(
+        "--output", choices=["table", "json"], default="table"
+    )
+    contracts_recent_events.set_defaults(func=_handle_contracts)
 
     # SC-10: record a single event from the CLI
     record = subcommands.add_parser(

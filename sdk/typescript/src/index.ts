@@ -2,6 +2,7 @@ export { SoroScanClient, SoroScanError, Paginator } from "./client.js";
 export { EventQueryBuilder, ContractQueryBuilder } from "./builder.js";
 export { verifyWebhookSignature } from "./webhookVerification.js";
 export { WebSocketClient } from "./websocket-client.js";
+export { MAX_RECENT_EVENTS_LIMIT } from "./types.js";
 export type {
   // Config
   SoroScanClientConfig,
@@ -59,6 +60,8 @@ export type {
   EventEntry,
   RecordEventsBatchParams,
   RecordEventsBatchResponse,
+  // SC-30: Recent contract events
+  GetContractRecentEventsParams,
   // WebSocket
   WebSocketClientConfig,
   EventCallback,

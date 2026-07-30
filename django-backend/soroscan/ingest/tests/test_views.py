@@ -670,6 +670,72 @@ class TestTransactionCorrelationView:
         
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
+    def test_contract_recent_events_returns_newest_first(self, api_client, contract):
+        """SC-30: recent-events endpoint returns events ordered newest first."""
+        ContractEventFactory(contract=contract, event_type="first", ledger=100, event_index=0)
+        ContractEventFactory(contract=contract, event_type="second", ledger=101, event_index=0)
+        ContractEventFactory(contract=contract, event_type="third", ledger=102, event_index=0)
+
+        url = reverse("contract-recent-events", args=[contract.contract_id])
+        response = api_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert [item["event_type"] for item in data] == ["third", "second", "first"]
+
+    def test_contract_recent_events_respects_limit(self, api_client, contract):
+        """SC-30: recent-events endpoint truncates results to the requested limit."""
+        for i in range(5):
+            ContractEventFactory(contract=contract, event_type=f"ev{i}", ledger=100 + i, event_index=0)
+
+        url = reverse("contract-recent-events", args=[contract.contract_id])
+        response = api_client.get(url, {"limit": 2})
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert len(data) == 2
+        assert data[0]["event_type"] == "ev4"
+        assert data[1]["event_type"] == "ev3"
+
+    def test_contract_recent_events_default_limit(self, api_client, contract):
+        """SC-30: recent-events endpoint defaults to 10 results when no limit is given."""
+        for i in range(15):
+            ContractEventFactory(contract=contract, event_type=f"ev{i}", ledger=100 + i, event_index=0)
+
+        url = reverse("contract-recent-events", args=[contract.contract_id])
+        response = api_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.json()) == 10
+
+    def test_contract_recent_events_rejects_limit_over_max(self, api_client, contract):
+        """SC-30: recent-events endpoint rejects a limit above the max cap."""
+        url = reverse("contract-recent-events", args=[contract.contract_id])
+        response = api_client.get(url, {"limit": 999})
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_contract_recent_events_rejects_invalid_limit(self, api_client, contract):
+        """SC-30: recent-events endpoint rejects a non-integer limit."""
+        url = reverse("contract-recent-events", args=[contract.contract_id])
+        response = api_client.get(url, {"limit": "not-a-number"})
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_contract_recent_events_missing_contract_returns_404(self, api_client):
+        url = reverse("contract-recent-events", args=["C" + "A" * 55])
+        response = api_client.get(url)
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_contract_recent_events_empty_for_new_contract(self, api_client, contract):
+        """SC-30: recent-events endpoint returns an empty list, not an error, when no events exist."""
+        url = reverse("contract-recent-events", args=[contract.contract_id])
+        response = api_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() == []
+
     def test_admin_ingest_errors_requires_staff(self, api_client, user):
         api_client.force_authenticate(user=user)
         url = reverse("admin-ingest-errors")

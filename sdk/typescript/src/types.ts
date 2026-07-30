@@ -377,6 +377,20 @@ export interface RecordEventsBatchResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SC-30: Recent contract events
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Maximum number of events that can be requested via `getContractRecentEvents`. */
+export const MAX_RECENT_EVENTS_LIMIT = 20;
+
+export interface GetContractRecentEventsParams {
+  /** Contract address to fetch recent events for */
+  contractId: ContractId;
+  /** Maximum number of events to return (1-20, default 10) */
+  limit?: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // WebSocket
 // ─────────────────────────────────────────────────────────────────────────────
 

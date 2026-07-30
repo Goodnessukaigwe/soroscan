@@ -1396,6 +1396,65 @@ def contract_event_types_view(request, contract_id: str):
     return Response(result)
 
 
+MAX_RECENT_EVENTS_LIMIT = 20
+
+
+@extend_schema(
+    parameters=[
+        inline_serializer(
+            name="ContractRecentEventsParams",
+            fields={
+                "limit": serializers.IntegerField(required=False),
+            },
+        )
+    ],
+    responses=ContractEventSerializer(many=True),
+)
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def contract_recent_events_view(request, contract_id: str):
+    """Get the most recent events for a specific contract, newest first (SC-30).
+
+    Mirrors the bounded on-chain recent-events ring buffer exposed by the
+    SoroScan core contract's ``recent_events`` function, backed here by the
+    indexed event history for richer payload data.
+    """
+    contract = get_cached_contract(contract_id)
+    if not contract:
+        from django.http import Http404
+        raise Http404
+
+    try:
+        limit = int(request.query_params.get("limit", 10))
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "limit must be an integer"}, status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if limit <= 0 or limit > MAX_RECENT_EVENTS_LIMIT:
+        return Response(
+            {
+                "detail": f"limit must be between 1 and {MAX_RECENT_EVENTS_LIMIT}",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    cache_key = stable_cache_key(
+        "contract_recent_events", {"contract_id": contract_id, "limit": limit}
+    )
+
+    def _build():
+        events = (
+            ContractEvent.objects.select_related("contract")
+            .filter(contract=contract)
+            .order_by("-ledger", "-event_index", "-id")[:limit]
+        )
+        return ContractEventSerializer(events, many=True).data
+
+    result = get_or_set_json(cache_key, 15, _build)
+    return Response(result)
+
+
 @extend_schema(
     parameters=[
         inline_serializer(

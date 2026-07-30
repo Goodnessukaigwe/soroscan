@@ -10,6 +10,14 @@ const INDEXERS_KEY: Symbol = symbol_short!("idxrs");
 const COUNTER_KEY: Symbol = symbol_short!("count");
 const CONTRACT_STATS_KEY: Symbol = symbol_short!("cstats");
 const CONTRACT_EVENT_TYPES_KEY: Symbol = symbol_short!("etypes");
+const CONTRACT_RECENT_EVENTS_KEY: Symbol = symbol_short!("revents");
+
+/// Maximum number of recent events retained per contract (SC-30).
+/// Older entries are evicted (FIFO) once this bound is reached.
+const MAX_RECENT_EVENTS_PER_CONTRACT: u32 = 20;
+
+/// Maximum `limit` value accepted by `recent_events` (SC-30).
+const MAX_RECENT_EVENTS_QUERY_LIMIT: u32 = MAX_RECENT_EVENTS_PER_CONTRACT;
 
 /// Represents a recorded event from an indexed contract.
 #[contracttype]
@@ -57,6 +65,36 @@ pub struct ContractStats {
     pub event_count: u64,
 }
 
+/// A versioned, correlation-safe structured event (SC-38).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StructuredEventRecord {
+    /// The contract that emitted the original event.
+    pub contract_id: Address,
+    /// The type/category of the event.
+    pub event_type: Symbol,
+    /// SHA-256 hash of the event payload for verification.
+    pub payload_hash: BytesN<32>,
+    /// Schema version used to encode the payload.
+    pub schema_version: u32,
+    /// Producer-supplied correlation ID used to deduplicate retries.
+    pub correlation_id: BytesN<32>,
+    /// Ledger sequence number when recorded.
+    pub ledger: u32,
+    /// Unix timestamp when recorded.
+    pub timestamp: u64,
+}
+
+/// Storage key variants for data that is not a fixed instance-level slot (SC-38).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    /// A structured event record keyed by its correlation ID.
+    StructuredByCorrelation(BytesN<32>),
+    /// The latest structured event recorded for a given event type.
+    LatestStructuredByType(Symbol),
+}
+
 /// Contract errors with explicit error codes.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -73,6 +111,31 @@ pub enum ContractError {
     InvalidBatchSize = 5,
     /// The indexer is currently paused and cannot record events (SC-10).
     IndexerPaused = 6,
+    /// Structured event `schema_version` must be greater than zero (SC-38).
+    InvalidSchemaVersion = 7,
+    /// A structured event with this correlation ID was already recorded (SC-38).
+    DuplicateCorrelation = 8,
+    /// The requested recent-events limit exceeds the maximum allowed (SC-30).
+    InvalidLimit = 9,
+}
+
+/// Append `record` to the bounded recent-events ring buffer for `contract_id`,
+/// evicting the oldest entry once `MAX_RECENT_EVENTS_PER_CONTRACT` is exceeded (SC-30).
+fn push_recent_event(env: &Env, contract_id: Address, record: EventRecord) {
+    let mut all: Map<Address, Vec<EventRecord>> = env
+        .storage()
+        .instance()
+        .get(&CONTRACT_RECENT_EVENTS_KEY)
+        .unwrap_or(Map::new(env));
+
+    let mut list = all.get(contract_id.clone()).unwrap_or(Vec::new(env));
+    list.push_back(record);
+    while list.len() > MAX_RECENT_EVENTS_PER_CONTRACT {
+        list.pop_front();
+    }
+
+    all.set(contract_id, list);
+    env.storage().instance().set(&CONTRACT_RECENT_EVENTS_KEY, &all);
 }
 
 #[contract]
@@ -250,6 +313,9 @@ impl SoroScanCore {
             env.storage().instance().set(&CONTRACT_EVENT_TYPES_KEY, &contract_types);
         }
 
+        // Track recent events per contract, bounded FIFO (SC-30)
+        push_recent_event(&env, contract_id, record.clone());
+
         // Publish the event for off-chain indexers
         env.events()
             .publish((symbol_short!("soroscan"), event_type), record);
@@ -387,6 +453,49 @@ impl SoroScanCore {
         }
     }
 
+    /// Get the most recent events recorded for a specific contract, newest first (SC-30).
+    ///
+    /// Only the last `MAX_RECENT_EVENTS_PER_CONTRACT` events per contract are retained
+    /// on-chain; older events are evicted FIFO as new ones are recorded.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract address to query
+    /// * `limit` - Maximum number of events to return. `0` means "no limit"
+    ///   (i.e. return everything retained). Values above
+    ///   `MAX_RECENT_EVENTS_PER_CONTRACT` return an error.
+    ///
+    /// # Returns
+    /// A vector of up to `limit` EventRecords, ordered most-recent-first
+    pub fn recent_events(
+        env: Env,
+        contract_id: Address,
+        limit: u32,
+    ) -> Result<Vec<EventRecord>, ContractError> {
+        if limit > MAX_RECENT_EVENTS_QUERY_LIMIT {
+            return Err(ContractError::InvalidLimit);
+        }
+
+        let all: Option<Map<Address, Vec<EventRecord>>> =
+            env.storage().instance().get(&CONTRACT_RECENT_EVENTS_KEY);
+        let stored = match all {
+            Some(map) => map.get(contract_id).unwrap_or(Vec::new(&env)),
+            None => Vec::new(&env),
+        };
+
+        let stored_len = stored.len();
+        let take = if limit == 0 { stored_len } else { limit.min(stored_len) };
+
+        let mut result = Vec::new(&env);
+        for i in 0..take {
+            // `stored` is oldest-first; walk backwards to return newest-first.
+            let idx = stored_len - 1 - i;
+            result.push_back(stored.get(idx).unwrap());
+        }
+
+        Ok(result)
+    }
+
     /// Check if an address is an authorized indexer.
     ///
     /// # Arguments
@@ -481,6 +590,9 @@ impl SoroScanCore {
                 types.push_back(entry.event_type.clone());
                 contract_types.set(entry.contract_id.clone(), types);
             }
+
+            // Track recent events per contract, bounded FIFO (SC-30)
+            push_recent_event(&env, entry.contract_id.clone(), record.clone());
 
             env.events().publish(
                 (symbol_short!("soroscan"), entry.event_type.clone()),
@@ -1365,5 +1477,197 @@ mod tests {
             &BytesN::from_array(&env, &[0u8; 32]),
         );
         assert_eq!(count, 1);
+    }
+
+    // ── SC-30: recent events per contract ───────────────────────────────────
+
+    #[test]
+    fn test_recent_events_empty_for_unknown_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _admin, _indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+
+        let events = client.recent_events(&target, &10);
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
+    fn test_recent_events_returns_newest_first() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+
+        client.add_indexer(&admin, &indexer);
+
+        client.record_event(
+            &indexer,
+            &target,
+            &symbol_short!("first"),
+            &BytesN::from_array(&env, &[1u8; 32]),
+        );
+        client.record_event(
+            &indexer,
+            &target,
+            &symbol_short!("second"),
+            &BytesN::from_array(&env, &[2u8; 32]),
+        );
+        client.record_event(
+            &indexer,
+            &target,
+            &symbol_short!("third"),
+            &BytesN::from_array(&env, &[3u8; 32]),
+        );
+
+        let events = client.recent_events(&target, &0);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events.get(0).unwrap().event_type, symbol_short!("third"));
+        assert_eq!(events.get(1).unwrap().event_type, symbol_short!("second"));
+        assert_eq!(events.get(2).unwrap().event_type, symbol_short!("first"));
+    }
+
+    #[test]
+    fn test_recent_events_respects_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+
+        client.add_indexer(&admin, &indexer);
+
+        for i in 0..5u32 {
+            client.record_event(
+                &indexer,
+                &target,
+                &symbol_short!("ev"),
+                &BytesN::from_array(&env, &[i as u8; 32]),
+            );
+        }
+
+        let events = client.recent_events(&target, &2);
+        assert_eq!(events.len(), 2);
+        // Newest first: the last two recorded payload hashes are [4;32] then [3;32].
+        assert_eq!(events.get(0).unwrap().payload_hash, BytesN::from_array(&env, &[4u8; 32]));
+        assert_eq!(events.get(1).unwrap().payload_hash, BytesN::from_array(&env, &[3u8; 32]));
+    }
+
+    #[test]
+    fn test_recent_events_evicts_oldest_beyond_cap() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+
+        client.add_indexer(&admin, &indexer);
+
+        // Record more than MAX_RECENT_EVENTS_PER_CONTRACT (20) events.
+        for i in 0..25u32 {
+            client.record_event(
+                &indexer,
+                &target,
+                &symbol_short!("ev"),
+                &BytesN::from_array(&env, &[(i % 255) as u8; 32]),
+            );
+        }
+
+        // Only the cap worth of events are retained.
+        let events = client.recent_events(&target, &0);
+        assert_eq!(events.len(), MAX_RECENT_EVENTS_PER_CONTRACT as u32);
+
+        // The newest entry corresponds to the 25th recorded event (index 24).
+        assert_eq!(
+            events.get(0).unwrap().payload_hash,
+            BytesN::from_array(&env, &[24u8; 32])
+        );
+        // The oldest retained entry is index 5 (0..4 were evicted).
+        assert_eq!(
+            events.get(events.len() - 1).unwrap().payload_hash,
+            BytesN::from_array(&env, &[5u8; 32])
+        );
+    }
+
+    #[test]
+    fn test_recent_events_invalid_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _admin, _indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+
+        let result = client.try_recent_events(&target, &(MAX_RECENT_EVENTS_PER_CONTRACT + 1));
+        assert_eq!(result, Err(Ok(ContractError::InvalidLimit)));
+    }
+
+    #[test]
+    fn test_recent_events_separate_per_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target_a = Address::generate(&env);
+        let target_b = Address::generate(&env);
+
+        client.add_indexer(&admin, &indexer);
+
+        client.record_event(
+            &indexer,
+            &target_a,
+            &symbol_short!("a_ev"),
+            &BytesN::from_array(&env, &[10u8; 32]),
+        );
+        client.record_event(
+            &indexer,
+            &target_b,
+            &symbol_short!("b_ev"),
+            &BytesN::from_array(&env, &[20u8; 32]),
+        );
+
+        let events_a = client.recent_events(&target_a, &0);
+        assert_eq!(events_a.len(), 1);
+        assert_eq!(events_a.get(0).unwrap().event_type, symbol_short!("a_ev"));
+
+        let events_b = client.recent_events(&target_b, &0);
+        assert_eq!(events_b.len(), 1);
+        assert_eq!(events_b.get(0).unwrap().event_type, symbol_short!("b_ev"));
+    }
+
+    #[test]
+    fn test_recent_events_includes_batch_recorded_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, SoroScanCore);
+        let client = SoroScanCoreClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let indexer = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        client.init(&admin);
+        client.add_indexer(&admin, &indexer);
+
+        let mut entries = Vec::new(&env);
+        entries.push_back(EventEntry {
+            contract_id: target.clone(),
+            event_type: symbol_short!("swap"),
+            payload_hash: BytesN::from_array(&env, &[1u8; 32]),
+        });
+        entries.push_back(EventEntry {
+            contract_id: target.clone(),
+            event_type: symbol_short!("mint"),
+            payload_hash: BytesN::from_array(&env, &[2u8; 32]),
+        });
+
+        client.record_events_batch(&indexer, &entries);
+
+        let events = client.recent_events(&target, &0);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events.get(0).unwrap().event_type, symbol_short!("mint"));
+        assert_eq!(events.get(1).unwrap().event_type, symbol_short!("swap"));
     }
 }
