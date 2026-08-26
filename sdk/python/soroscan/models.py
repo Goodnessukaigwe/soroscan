@@ -65,6 +65,9 @@ class ContractStats(BaseModel):
     last_activity: datetime | None = None
 
 
+MAX_RECENT_EVENTS_LIMIT = 20
+
+
 class PaginatedResponse(BaseModel, Generic[T]):
     """Generic paginated response wrapper."""
 

@@ -113,6 +113,10 @@ Choose the SDK that fits your tech stack:
 #### Python
 ```bash
 pip install soroscan-sdk
+
+# Optional: query events from the terminal
+soroscan events --contract ABC123 --event-type transfer --limit 10
+soroscan webhooks list
 ```
 
 #### TypeScript / JavaScript

@@ -11,10 +11,30 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from soroscan import __version__
 from soroscan.client import SoroScanClient
 from soroscan.exceptions import SoroScanError
 
 DEFAULT_BASE_URL = "https://api.soroscan.io"
+
+EVENT_COLUMNS = ["id", "contract_id", "event_type", "ledger", "event_index", "timestamp"]
+CONTRACT_COLUMNS = ["id", "contract_id", "name", "is_active", "event_count"]
+WEBHOOK_COLUMNS = [
+    "id",
+    "contract_id",
+    "event_type",
+    "target_url",
+    "is_active",
+    "failure_count",
+]
+TX_COLUMNS = ["status", "tx_hash", "transaction_status", "error"]
+HEALTH_COLUMNS = [
+    "contract_id",
+    "status",
+    "minutes_since_last_event",
+    "consecutive_failures",
+    "checked_at",
+]
 
 
 def _model_to_dict(value: Any) -> dict[str, Any]:
@@ -44,10 +64,7 @@ def _format_cell(value: Any) -> str:
 def _print_table(rows: Iterable[Any], columns: list[str]) -> None:
     data = [_model_to_dict(row) for row in rows]
     widths = {
-        column: max(
-            [len(column)]
-            + [len(_format_cell(row.get(column, ""))) for row in data]
-        )
+        column: max([len(column)] + [len(_format_cell(row.get(column, ""))) for row in data])
         for column in columns
     }
 
@@ -55,13 +72,21 @@ def _print_table(rows: Iterable[Any], columns: list[str]) -> None:
     separator = "  ".join("-" * widths[column] for column in columns)
     print(header)
     print(separator)
+    if not data:
+        print("(no results)")
+        return
     for row in data:
         print(
-            "  ".join(
-                _format_cell(row.get(column, "")).ljust(widths[column])
-                for column in columns
-            )
+            "  ".join(_format_cell(row.get(column, "")).ljust(widths[column]) for column in columns)
         )
+
+
+def _emit(payload: Any, output: str, columns: list[str]) -> None:
+    if output == "json":
+        _print_json(payload)
+        return
+    rows = payload if isinstance(payload, list) else [payload]
+    _print_table(rows, columns)
 
 
 def _build_client(args: argparse.Namespace) -> SoroScanClient:
@@ -80,13 +105,7 @@ def _handle_events(args: argparse.Namespace) -> int:
             page_size=args.limit,
             ordering=args.ordering,
         )
-    if args.output == "json":
-        _print_json(response.results)
-    else:
-        _print_table(
-            response.results,
-            ["id", "contract_id", "event_type", "ledger", "event_index", "timestamp"],
-        )
+    _emit(response.results, args.output, EVENT_COLUMNS)
     return 0
 
 
@@ -94,38 +113,22 @@ def _handle_contracts(args: argparse.Namespace) -> int:
     with _build_client(args) as client:
         if args.contract_command == "get":
             contract = client.get_contract(args.contract_id)
-            if args.output == "json":
-                _print_json(contract)
-            else:
-                _print_table(
-                    [contract],
-                    ["id", "contract_id", "name", "is_active", "event_count"],
-                )
+            _emit(contract, args.output, CONTRACT_COLUMNS)
             return 0
 
         if args.contract_command == "events":
             events = client.get_contract_events(args.contract_id, limit=args.limit)
-            if args.output == "json":
-                _print_json(events)
-            else:
-                _print_table(
-                    events,
-                    ["id", "event_type", "ledger", "event_index", "timestamp"],
-                )
+            _emit(events, args.output, ["id", "event_type", "ledger", "event_index", "timestamp"])
+            return 0
+
+        if args.contract_command == "recent-events":
+            events = client.get_contract_recent_events(args.contract_id, limit=args.limit)
+            _emit(events, args.output, ["id", "event_type", "ledger", "event_index", "timestamp"])
             return 0
 
         if args.contract_command == "health":
             health = client.get_contract_health(args.contract_id)
-            if args.output == "json":
-                _print_json(health)
-            else:
-                _print_table(
-                    [health],
-                    [
-                        "contract_id", "status", "minutes_since_last_event",
-                        "consecutive_failures", "checked_at",
-                    ],
-                )
+            _emit(health, args.output, HEALTH_COLUMNS)
             return 0
 
         response = client.get_contracts(
@@ -133,26 +136,17 @@ def _handle_contracts(args: argparse.Namespace) -> int:
             search=args.search,
             page_size=args.limit,
         )
-    if args.output == "json":
-        _print_json(response.results)
-    else:
-        _print_table(
-            response.results,
-            ["id", "contract_id", "name", "is_active", "event_count"],
-        )
+    _emit(response.results, args.output, CONTRACT_COLUMNS)
     return 0
 
 
 def _handle_indexers(args: argparse.Namespace) -> int:
     with _build_client(args) as client:
         result = client.add_indexer(args.indexer_address)
-    if args.output == "json":
-        _print_json(result)
-    else:
-        _print_table(
-            [result],
-            ["status", "tx_hash", "transaction_status", "error"],
-        )
+    _emit(result, args.output, TX_COLUMNS)
+    return 0
+
+
 def _handle_record_event(args: argparse.Namespace) -> int:
     """Submit a single event to the SoroScan contract (SC-10)."""
     with _build_client(args) as client:
@@ -161,10 +155,7 @@ def _handle_record_event(args: argparse.Namespace) -> int:
             event_type=args.event_type,
             payload_hash=args.payload_hash,
         )
-    if args.output == "json":
-        _print_json(result)
-    else:
-        _print_table([result], ["status", "tx_hash", "transaction_status", "error"])
+    _emit(result, args.output, TX_COLUMNS)
     return 0
 
 
@@ -179,20 +170,36 @@ def _handle_webhooks(args: argparse.Namespace) -> int:
             return 0
 
         response = client.get_webhooks(page_size=args.limit)
-    if args.output == "json":
-        _print_json(response.results)
-    else:
-        _print_table(
-            response.results,
-            ["id", "contract_id", "event_type", "target_url", "is_active", "failure_count"],
-        )
+    _emit(response.results, args.output, WEBHOOK_COLUMNS)
     return 0
+
+
+def _add_output_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--output",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="soroscan",
-        description="Query SoroScan events, contracts, and webhooks.",
+        description="Standalone CLI for querying SoroScan events, contracts, and webhooks.",
+        epilog=(
+            "examples:\n"
+            "  soroscan events --contract ABC123 --event-type transfer --limit 10\n"
+            "  soroscan webhooks list\n"
+            "  soroscan webhooks test 1\n"
+            "  soroscan contracts list --output json\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "--base-url",
@@ -213,18 +220,18 @@ def build_parser() -> argparse.ArgumentParser:
     events.add_argument("--event-type", help="Filter by event type")
     events.add_argument("--limit", type=int, default=10, help="Maximum events to return")
     events.add_argument("--ordering", default="-timestamp", help="API ordering expression")
-    events.add_argument("--output", choices=["table", "json"], default="table")
+    _add_output_flag(events)
     events.set_defaults(func=_handle_events)
 
     webhooks = subcommands.add_parser("webhooks", help="Manage webhook subscriptions")
     webhook_subcommands = webhooks.add_subparsers(dest="webhook_command", required=True)
     webhooks_list = webhook_subcommands.add_parser("list", help="List webhooks")
     webhooks_list.add_argument("--limit", type=int, default=50)
-    webhooks_list.add_argument("--output", choices=["table", "json"], default="table")
+    _add_output_flag(webhooks_list)
     webhooks_list.set_defaults(func=_handle_webhooks)
     webhooks_test = webhook_subcommands.add_parser("test", help="Send a test webhook")
     webhooks_test.add_argument("webhook_id", type=int)
-    webhooks_test.add_argument("--output", choices=["table", "json"], default="table")
+    _add_output_flag(webhooks_test)
     webhooks_test.set_defaults(func=_handle_webhooks)
 
     contracts = subcommands.add_parser("contracts", help="Query tracked contracts")
@@ -233,32 +240,69 @@ def build_parser() -> argparse.ArgumentParser:
     contracts_list.add_argument("--active", action="store_true", default=None)
     contracts_list.add_argument("--search", help="Search by name or contract ID")
     contracts_list.add_argument("--limit", type=int, default=50)
-    contracts_list.add_argument("--output", choices=["table", "json"], default="table")
+    _add_output_flag(contracts_list)
     contracts_list.set_defaults(func=_handle_contracts)
     contracts_get = contract_subcommands.add_parser("get", help="Get a contract")
     contracts_get.add_argument("contract_id")
-    contracts_get.add_argument("--output", choices=["table", "json"], default="table")
+    _add_output_flag(contracts_get)
     contracts_get.set_defaults(func=_handle_contracts)
     contracts_events = contract_subcommands.add_parser(
         "events", help="Get recent events for a contract (SC-16)"
     )
     contracts_events.add_argument("contract_id", help="Contract address (C...)")
     contracts_events.add_argument("--limit", type=int, default=100, help="Max events")
-    contracts_events.add_argument("--output", choices=["table", "json"], default="table")
+    _add_output_flag(contracts_events)
     contracts_events.set_defaults(func=_handle_contracts)
+    contracts_recent_events = contract_subcommands.add_parser(
+        "recent-events", help="Get the most recent events for a contract (SC-30)"
+    )
+    contracts_recent_events.add_argument("contract_id", help="Contract address (C...)")
+    contracts_recent_events.add_argument(
+        "--limit", type=int, default=10, help="Maximum events to return (1-20, default 10)"
+    )
+    _add_output_flag(contracts_recent_events)
+    contracts_recent_events.set_defaults(func=_handle_contracts)
     contracts_health = contract_subcommands.add_parser(
         "health", help="Get health status for a contract (SC-16)"
     )
     contracts_health.add_argument("contract_id", help="Contract address (C...)")
-    contracts_health.add_argument("--output", choices=["table", "json"], default="table")
+    _add_output_flag(contracts_health)
     contracts_health.set_defaults(func=_handle_contracts)
 
     indexers = subcommands.add_parser("indexers", help="Manage Soroban contract indexers (SC-9)")
     indexer_subcommands = indexers.add_subparsers(dest="indexer_command", required=True)
     indexers_add = indexer_subcommands.add_parser("add", help="Authorize an indexer address")
     indexers_add.add_argument("indexer_address", help="Stellar address of the indexer")
-    indexers_add.add_argument("--output", choices=["table", "json"], default="table")
+    _add_output_flag(indexers_add)
     indexers_add.set_defaults(func=_handle_indexers)
+
+    record_event = subcommands.add_parser(
+        "record-event",
+        help="Submit a single event to the SoroScan indexing contract",
+    )
+    record_event.add_argument("contract_id", help="Target contract address (C...)")
+    record_event.add_argument("event_type", help="Event type name (e.g. transfer, swap)")
+    record_event.add_argument(
+        "payload_hash",
+        help="SHA-256 hex hash of the event payload (64 hex chars)",
+    )
+    _add_output_flag(record_event)
+    record_event.set_defaults(func=_handle_record_event)
+
+    record = subcommands.add_parser(
+        "record",
+        help="Submit a single event using flag-style arguments",
+    )
+    record.add_argument("--contract", dest="contract_id", required=True, help="Target contract ID")
+    record.add_argument("--event-type", dest="event_type", required=True, help="Event type name")
+    record.add_argument(
+        "--payload-hash",
+        dest="payload_hash",
+        required=True,
+        help="SHA-256 hex hash of the event payload",
+    )
+    _add_output_flag(record)
+    record.set_defaults(func=_handle_record_event)
 
     return parser
 
@@ -268,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except SoroScanError as exc:
+    except (SoroScanError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 

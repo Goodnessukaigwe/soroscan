@@ -20,20 +20,32 @@ pip install soroscan-sdk
 
 ### CLI
 
-Installing the package exposes the `soroscan` command:
+Installing the package exposes the `soroscan` command for local developer use.
+Commands print a table by default; pass `--output json` for machine-readable results.
 
 ```bash
-export SOROSCAN_API_KEY="your-api-key"
-export SOROSCAN_BASE_URL="https://api.soroscan.io"
+pip install soroscan-sdk
 
-soroscan events --contract CCAAA... --event-type transfer --limit 10
-soroscan events --contract CCAAA... --output json
+export SOROSCAN_API_KEY="your-api-key"
+export SOROSCAN_BASE_URL="https://api.soroscan.io"   # or http://localhost:8000
+
+# Query events
+soroscan events --contract ABC123 --event-type transfer --limit 10
+soroscan events --contract ABC123 --output json
+
+# Webhooks
 soroscan webhooks list
 soroscan webhooks test 1
+
+# Contracts
 soroscan contracts list --search token
 soroscan contracts get 1 --output json
 soroscan contracts events CCAAA... --limit 20
+soroscan contracts recent-events CCAAA... --limit 10
 soroscan contracts health CCAAA... --output json
+
+# Record an event
+soroscan record-event CCAAA... transfer <payload-hash>
 ```
 
 ### Synchronous Client

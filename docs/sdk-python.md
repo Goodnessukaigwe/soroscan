@@ -8,6 +8,22 @@ The **SoroScan Python SDK** is the official library for integrating SoroScan int
 pip install soroscan-sdk
 ```
 
+This also installs the `soroscan` CLI for querying events, webhooks, and contracts locally.
+
+## CLI
+
+```bash
+export SOROSCAN_API_KEY="your-api-key"
+export SOROSCAN_BASE_URL="https://api.soroscan.io"
+
+soroscan events --contract ABC123 --event-type transfer --limit 10
+soroscan webhooks list
+soroscan webhooks test 1
+soroscan contracts list --output json
+```
+
+Use `--output table` (default) or `--output json`. Point `--base-url` at a local SoroScan instance when developing against a self-hosted stack.
+
 ## Basic Usage
 
 ### Synchronous Client
