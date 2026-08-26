@@ -177,6 +177,61 @@ class OrganizationCostSnapshot(models.Model):
         )
 
 
+class Invoice(models.Model):
+    """Billing invoice generated from an organization's monthly cost snapshot."""
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        ISSUED = "issued", "Issued"
+        PAID = "paid", "Paid"
+        VOID = "void", "Void"
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="invoices",
+    )
+    invoice_number = models.CharField(max_length=64, unique=True, db_index=True)
+    billing_period = models.DateField(
+        help_text="Month bucket represented by first day of the month (UTC).",
+    )
+    amount_usd = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.ISSUED,
+    )
+    line_items = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Invoice line items derived from cost snapshot breakdown.",
+    )
+    cost_snapshot = models.ForeignKey(
+        OrganizationCostSnapshot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="invoices",
+    )
+    notes = models.TextField(blank=True)
+    issued_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-billing_period", "-created_at"]
+        unique_together = [("organization", "billing_period")]
+        indexes = [
+            models.Index(
+                fields=["organization", "billing_period"],
+                name="ingest_invoice_org_period_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.invoice_number} ({self.organization.name}, {self.billing_period})"
+
+
 class Team(models.Model):
     """
     Multi-tenant organization: groups users and shared tracked contracts.
@@ -1231,6 +1286,12 @@ class APIKey(models.Model):
         if self.team and not TeamMembership.objects.filter(team=self.team, user=self.user).exists():
             raise ValidationError("API key user must be a member of the assigned team.")
         super().save(*args, **kwargs)
+
+    def rotate(self) -> str:
+        """Invalidate the current secret and return a newly generated key."""
+        self.key = secrets.token_urlsafe(48)[:64]
+        self.save(update_fields=["key"])
+        return self.key
 
     def __str__(self):
         return f"{self.name} [{self.tier}] ({self.user})"

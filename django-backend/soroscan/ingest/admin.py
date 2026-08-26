@@ -46,6 +46,7 @@ from .models import (
     EventDeduplicationConfig,
     Organization,
     OrganizationBudget,
+    Invoice,
     OrganizationCostSnapshot,
     OrganizationMembership,
     PIIField,
@@ -228,6 +229,21 @@ class OrganizationCostSnapshotAdmin(admin.ModelAdmin):
     search_fields = ["organization__name", "organization__slug"]
     readonly_fields = ["created_at", "updated_at"]
 
+
+@admin.register(Invoice)
+class InvoiceAdmin(admin.ModelAdmin):
+    list_display = [
+        "invoice_number",
+        "organization",
+        "billing_period",
+        "amount_usd",
+        "status",
+        "issued_at",
+        "created_at",
+    ]
+    list_filter = ["status", "billing_period"]
+    search_fields = ["invoice_number", "organization__name", "organization__slug"]
+    readonly_fields = ["invoice_number", "created_at", "updated_at"]
 
 
 @admin.register(TrackedContract)
