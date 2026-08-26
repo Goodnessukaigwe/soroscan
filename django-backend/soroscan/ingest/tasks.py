@@ -798,7 +798,7 @@ def validate_event_payload(
     max_retries=5,
     soft_time_limit=30,
 )
-def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
+def dispatch_webhook(self, subscription_id: int, event_id: int, replay: bool = False) -> bool:
     """
     Deliver a single ContractEvent to a WebhookSubscription endpoint.
 
@@ -808,6 +808,10 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
     - Base Delay: Configurable per subscription (default 2s)
     - Jitter: Applied to exponential retries to prevent thundering herds
     - Suspension: Subscriptions are suspended after all retries are exhausted.
+
+    When ``replay`` is True (used by the local event replay utility) delivery
+    deduplication is skipped so the same historical event can be re-sent, and
+    the payload includes the event's original timestamp.
     """
     _start = time.monotonic()
     m = _get_metrics()
@@ -841,30 +845,32 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
             )
             return False
 
-        # Deduplicate identical webhook deliveries to prevent floods
-        dedup_window = int(getattr(settings, "WEBHOOK_DEDUP_WINDOW_SECONDS", 300))
-        dedup_material = json.dumps(
-            {
-                "subscription_id": subscription_id,
-                "contract_id": event.contract.contract_id,
-                "event_type": event.event_type,
-                "ledger": event.ledger,
-                "event_index": event.event_index,
-                "payload": event.payload,
-            },
-            sort_keys=True,
-        )
-        dedup_hash = hashlib.sha256(dedup_material.encode("utf-8")).hexdigest()
-        dedup_key = f"soroscan:webhooks:dedup:{subscription_id}:{dedup_hash}"
-        if not cache.add(dedup_key, "1", timeout=dedup_window):
-            logger.info(
-                "Deduplicated webhook delivery for subscription=%s event=%s",
-                subscription_id,
-                event_id,
-                extra={"webhook_id": subscription_id, "event_id": event_id},
+        # Deduplicate identical webhook deliveries to prevent floods.
+        # Replay skips dedup so operators can retest the same historical event.
+        if not replay:
+            dedup_window = int(getattr(settings, "WEBHOOK_DEDUP_WINDOW_SECONDS", 300))
+            dedup_material = json.dumps(
+                {
+                    "subscription_id": subscription_id,
+                    "contract_id": event.contract.contract_id,
+                    "event_type": event.event_type,
+                    "ledger": event.ledger,
+                    "event_index": event.event_index,
+                    "payload": event.payload,
+                },
+                sort_keys=True,
             )
-            m.webhook_deduplicated_total.inc()
-            return True  # Consider deduplicated delivery as successful
+            dedup_hash = hashlib.sha256(dedup_material.encode("utf-8")).hexdigest()
+            dedup_key = f"soroscan:webhooks:dedup:{subscription_id}:{dedup_hash}"
+            if not cache.add(dedup_key, "1", timeout=dedup_window):
+                logger.info(
+                    "Deduplicated webhook delivery for subscription=%s event=%s",
+                    subscription_id,
+                    event_id,
+                    extra={"webhook_id": subscription_id, "event_id": event_id},
+                )
+                m.webhook_deduplicated_total.inc()
+                return True  # Consider deduplicated delivery as successful
 
         event_data = {
             "contract_id": event.contract.contract_id,
@@ -874,6 +880,12 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
             "event_index": event.event_index,
             "tx_hash": event.tx_hash,
         }
+        if replay:
+            original_ts = event.timestamp
+            if original_ts is not None and timezone.is_naive(original_ts):
+                original_ts = timezone.make_aware(original_ts, dt_timezone.utc)
+            event_data["timestamp"] = original_ts.isoformat() if original_ts else None
+            event_data["replay"] = True
         payload_bytes = json.dumps(event_data, sort_keys=True).encode("utf-8")
         payload_size = len(payload_bytes)
 
@@ -899,6 +911,11 @@ def dispatch_webhook(self, subscription_id: int, event_id: int) -> bool:
             "X-SoroScan-Signature": _build_webhook_signature_header(webhook, payload_bytes),
             "X-SoroScan-Timestamp": timezone.now().isoformat(),
         }
+        if replay:
+            headers["X-SoroScan-Replay"] = "true"
+            original_ts = event_data.get("timestamp")
+            if original_ts:
+                headers["X-SoroScan-Original-Timestamp"] = original_ts
         inject_trace_headers(headers)
 
         attempt_number = self.request.retries + 1

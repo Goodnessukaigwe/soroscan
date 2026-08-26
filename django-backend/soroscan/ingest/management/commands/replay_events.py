@@ -1,44 +1,47 @@
 """
 Management command: replay_events
 
-Replay ContractEvent records through webhook delivery for debugging and retesting.
+Replay ContractEvent records from the database through existing webhook
+delivery or event-processing logic. Events are fetched via the Django ORM
+and dispatched in original-timestamp order.
+
+Works against whichever environment Django is configured for (local .env
+or remote DATABASE_URL / REDIS_URL). Use --environment to choose eager
+local dispatch vs remote Celery enqueue.
 
 Usage:
     python manage.py replay_events --contract=CA7N...
     python manage.py replay_events --contract=CA7N... --event-type=swap
     python manage.py replay_events --contract=CA7N... --from-ledger=100 --to-ledger=200
     python manage.py replay_events --contract=CA7N... --dry-run
-    python manage.py replay_events --contract=CA7N... --limit=10
-
-Options:
-    --contract          Contract ID (required)
-    --event-type        Filter by event type
-    --from-ledger       Start ledger (inclusive)
-    --to-ledger         End ledger (inclusive)
-    --from-date         Start date (ISO format)
-    --to-date           End date (ISO format)
-    --limit             Max events to replay (default: 100, 0=all)
-    --dry-run           Preview without dispatching webhooks
-    --webhook-id        Replay only to specific webhook subscription ID
-    --output-json       Write delivery report to JSON file instead of stdout
+    python manage.py replay_events --contract=CA7N... --environment=remote --target=processing
+    python manage.py replay_events --contract=CA7N... --realtime --limit=10
 """
 import json
-from datetime import datetime
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
 
-from soroscan.ingest.models import (
-    ContractEvent,
-    TrackedContract,
-    WebhookSubscription,
-    WebhookDeliveryLog,
+from soroscan.ingest.services.event_replay import (
+    DEFAULT_LIMIT,
+    DEFAULT_MAX_DELAY_SECONDS,
+    ENV_LOCAL,
+    TARGET_PROCESSING,
+    TARGET_WEBHOOKS,
+    VALID_ENVIRONMENTS,
+    VALID_TARGETS,
+    ReplayError,
+    replay_events,
 )
 
 
 class Command(BaseCommand):
-    help = "Replay contract events through webhook delivery for debugging."
+    help = (
+        "Replay stored contract events through webhook delivery or event processing. "
+        "Events are fetched from the database and replayed with their original timestamps. "
+        "Use --environment local (eager apply) or remote (Celery delay). "
+        "DATABASE_URL / REDIS_URL select the local or remote data store."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -74,9 +77,15 @@ class Command(BaseCommand):
             help="Include events up to this date (ISO format)",
         )
         parser.add_argument(
+            "--event-id",
+            type=int,
+            default=None,
+            help="Replay a single ContractEvent primary key",
+        )
+        parser.add_argument(
             "--limit",
             type=int,
-            default=100,
+            default=DEFAULT_LIMIT,
             help="Max events to replay (default: 100, 0 = all)",
         )
         parser.add_argument(
@@ -91,202 +100,133 @@ class Command(BaseCommand):
             help="Replay only to specific webhook subscription ID",
         )
         parser.add_argument(
+            "--environment",
+            choices=VALID_ENVIRONMENTS,
+            default=ENV_LOCAL,
+            help=(
+                "local: run dispatch synchronously via Celery apply (developer machine). "
+                "remote: enqueue onto the configured Celery broker (staging/production workers). "
+                f"Default: {ENV_LOCAL}."
+            ),
+        )
+        parser.add_argument(
+            "--target",
+            choices=VALID_TARGETS,
+            default=TARGET_WEBHOOKS,
+            help=(
+                f"{TARGET_WEBHOOKS}: re-send via dispatch_webhook. "
+                f"{TARGET_PROCESSING}: re-run process_new_event. "
+                f"Default: {TARGET_WEBHOOKS}."
+            ),
+        )
+        parser.add_argument(
+            "--realtime",
+            action="store_true",
+            help="Sleep between events using original timestamp gaps (capped by --max-delay)",
+        )
+        parser.add_argument(
+            "--max-delay",
+            type=float,
+            default=DEFAULT_MAX_DELAY_SECONDS,
+            help=f"Maximum sleep in seconds when --realtime is set (default: {DEFAULT_MAX_DELAY_SECONDS})",
+        )
+        parser.add_argument(
             "--output-json",
             default=None,
             help="Write delivery report to a JSON file",
         )
 
     def handle(self, *args, **options):
-        contract_id = options["contract"]
-        event_type = options["event_type"]
-        from_ledger = options["from_ledger"]
-        to_ledger = options["to_ledger"]
-        from_date = options["from_date"]
-        to_date = options["to_date"]
-        limit = options["limit"]
-        dry_run = options["dry_run"]
-        webhook_id = options["webhook_id"]
-        output_json = options["output_json"]
+        try:
+            report = replay_events(
+                options["contract"],
+                environment=options["environment"],
+                target=options["target"],
+                event_type=options["event_type"],
+                from_ledger=options["from_ledger"],
+                to_ledger=options["to_ledger"],
+                from_date=options["from_date"],
+                to_date=options["to_date"],
+                event_id=options["event_id"],
+                limit=options["limit"],
+                dry_run=options["dry_run"],
+                webhook_id=options["webhook_id"],
+                realtime=options["realtime"],
+                max_delay_seconds=options["max_delay"],
+            )
+        except ReplayError as exc:
+            raise CommandError(str(exc)) from exc
 
-        if not TrackedContract.objects.filter(contract_id=contract_id).exists():
-            raise CommandError(f"No TrackedContract found with contract_id={contract_id!r}")
-
-        qs = (
-            ContractEvent.objects.filter(contract__contract_id=contract_id)
-            .select_related("contract")
-            .order_by("ledger", "event_index", "timestamp")
+        db = report.database
+        self.stderr.write(
+            f"Found {report.summary['events_matched']} matching events, "
+            f"replaying {report.summary['events_processed']} "
+            f"[{report.environment}/{report.target}] "
+            f"db={db.get('host')}/{db.get('name')}..."
         )
 
-        if event_type:
-            qs = qs.filter(event_type=event_type)
-        if from_ledger is not None:
-            qs = qs.filter(ledger__gte=from_ledger)
-        if to_ledger is not None:
-            qs = qs.filter(ledger__lte=to_ledger)
-        if from_date:
-            try:
-                from_dt = datetime.fromisoformat(from_date)
-                if timezone.is_naive(from_dt):
-                    from_dt = timezone.make_aware(from_dt)
-                qs = qs.filter(timestamp__gte=from_dt)
-            except ValueError as exc:
-                raise CommandError(f"Invalid --from-date: {exc}")
-        if to_date:
-            try:
-                to_dt = datetime.fromisoformat(to_date)
-                if timezone.is_naive(to_dt):
-                    to_dt = timezone.make_aware(to_dt)
-                qs = qs.filter(timestamp__lte=to_dt)
-            except ValueError as exc:
-                raise CommandError(f"Invalid --to-date: {exc}")
-
-        total = qs.count()
-        if limit > 0:
-            qs = qs[:limit]
-
-        events = list(qs)
-        if not events:
+        if not report.deliveries and report.summary["events_matched"] == 0:
             self.stdout.write("No events found matching the filters.")
             return
 
-        self.stderr.write(f"Found {total} matching events, replaying {len(events)}...")
+        if (
+            report.target == TARGET_WEBHOOKS
+            and report.summary["webhook_dispatches"] == 0
+            and report.summary["skipped"]
+            and not report.deliveries
+        ):
+            self.stdout.write("No matching webhooks found for these events. Nothing to replay.")
 
-        if webhook_id:
-            try:
-                single_webhook = WebhookSubscription.objects.get(pk=webhook_id)
-            except WebhookSubscription.DoesNotExist:
-                raise CommandError(f"No WebhookSubscription found with id={webhook_id}")
-            if str(single_webhook.contract.contract_id) != str(contract_id):
-                raise CommandError(f"Webhook {webhook_id} does not belong to contract {contract_id}")
-            webhooks = [single_webhook]
-        else:
-            webhooks = list(
-                WebhookSubscription.objects.filter(
-                    contract__contract_id=contract_id,
-                    is_active=True,
-                )
-            )
-            if not webhooks:
-                self.stdout.write("No active webhooks found for this contract. Nothing to replay.")
-                return
-
-        report = {
-            "contract_id": contract_id,
-            "mode": "dry-run" if dry_run else "live",
-            "filters": {
-                "event_type": event_type,
-                "from_ledger": from_ledger,
-                "to_ledger": to_ledger,
-                "from_date": from_date,
-                "to_date": to_date,
-                "limit": limit,
-                "webhook_id": webhook_id,
-            },
-            "summary": {
-                "events_processed": 0,
-                "webhook_dispatches": 0,
-                "successes": 0,
-                "failures": 0,
-                "skipped": 0,
-            },
-            "deliveries": [],
-        }
-
-        for event in events:
-            report["summary"]["events_processed"] += 1
-            for webhook in webhooks:
-                if event_type and webhook.event_type and webhook.event_type != event_type:
-                    continue
-                if not webhook.should_ingest_event(event.event_type):
-                    report["summary"]["skipped"] += 1
-                    continue
-
-                if dry_run:
-                    self.stdout.write(
-                        f"  [DRY-RUN] Would dispatch event {event.id} ({event.event_type}) "
-                        f"to webhook {webhook.id} -> {webhook.target_url}"
-                    )
-                    report["summary"]["webhook_dispatches"] += 1
-                    report["deliveries"].append({
-                        "event_id": event.id,
-                        "event_type": event.event_type,
-                        "ledger": event.ledger,
-                        "timestamp": event.timestamp.isoformat() if event.timestamp else None,
-                        "webhook_id": webhook.id,
-                        "webhook_url": webhook.target_url,
-                        "status": "dry-run",
-                    })
-                else:
-                    dispatch_result = self._replay_dispatch(webhook, event)
-                    report["summary"]["webhook_dispatches"] += 1
-                    if dispatch_result["success"]:
-                        report["summary"]["successes"] += 1
-                    else:
-                        report["summary"]["failures"] += 1
-                    report["deliveries"].append({
-                        "event_id": event.id,
-                        "event_type": event.event_type,
-                        "ledger": event.ledger,
-                        "timestamp": event.timestamp.isoformat() if event.timestamp else None,
-                        "webhook_id": webhook.id,
-                        "webhook_url": webhook.target_url,
-                        **dispatch_result,
-                    })
-
-        # Print summary
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS("=== Replay Summary ==="))
-        self.stdout.write(f"Mode:             {'DRY RUN' if dry_run else 'LIVE'}")
-        self.stdout.write(f"Events processed: {report['summary']['events_processed']}")
-        self.stdout.write(f"Webhook dispatches: {report['summary']['webhook_dispatches']}")
-        self.stdout.write(f"Successes:        {report['summary']['successes']}")
-        self.stdout.write(f"Failures:         {report['summary']['failures']}")
-        self.stdout.write(f"Skipped:          {report['summary']['skipped']}")
+        self.stdout.write(f"Mode:             {'DRY RUN' if options['dry_run'] else 'LIVE'}")
+        self.stdout.write(f"Environment:      {report.environment}")
+        self.stdout.write(f"Target:           {report.target}")
+        self.stdout.write(f"Database:         {db.get('host')}/{db.get('name')}")
+        self.stdout.write(f"Events processed: {report.summary['events_processed']}")
+        self.stdout.write(f"Webhook dispatches: {report.summary['webhook_dispatches']}")
+        self.stdout.write(f"Successes:        {report.summary['successes']}")
+        self.stdout.write(f"Failures:         {report.summary['failures']}")
+        self.stdout.write(f"Queued:           {report.summary['queued']}")
+        self.stdout.write(f"Skipped:          {report.summary['skipped']}")
 
+        output_json = options["output_json"]
         if output_json:
-            self._write_report(report, output_json)
-        elif not dry_run:
+            self._write_report(report.to_dict(), output_json)
+
+        if report.deliveries and not output_json:
             self.stdout.write("")
-            self.stdout.write("Detailed delivery log (last 10):")
-            for delivery in report["deliveries"][-10:]:
-                status = delivery["status"]
-                status_code = delivery.get("status_code")
+            heading = (
+                "Planned deliveries (last 10):"
+                if options["dry_run"]
+                else "Detailed delivery log (last 10):"
+            )
+            self.stdout.write(heading)
+            for delivery in report.deliveries[-10:]:
+                status = delivery.status
+                status_code = delivery.status_code
+                original_ts = delivery.original_timestamp or ""
                 if "success" in status:
                     style = self.style.SUCCESS
-                elif "fail" in status or (status_code and status_code >= 400):
+                elif "fail" in status or "error" in status or (status_code and status_code >= 400):
                     style = self.style.ERROR
                 else:
-                    def style(x): return x
+                    def style(text):
+                        return text
+                extra = f" {status_code}" if status_code else ""
+                webhook_bit = (
+                    f"-> Webhook {delivery.webhook_id} "
+                    if delivery.webhook_id is not None
+                    else ""
+                )
                 self.stdout.write(
-                    f"  Event {delivery['event_id']} ({delivery['event_type']}@{delivery['ledger']}) "
-                    f"-> Webhook {delivery['webhook_id']}: {style(status)} {status_code or ''}".rstrip()
+                    f"  Event {delivery.event_id} ({delivery.event_type}@"
+                    f"{delivery.ledger} {original_ts}) {webhook_bit}: {style(status)}{extra}".rstrip()
                 )
 
-    def _replay_dispatch(self, webhook: WebhookSubscription, event: ContractEvent) -> dict:
-        try:
-            from soroscan.ingest.tasks import dispatch_webhook
-        except ImportError:
-            return {"success": False, "status": "error", "status_code": None, "error": "Celery tasks unavailable"}
-
-        try:
-            result = dispatch_webhook.apply(args=[webhook.id, event.id])
-            if result.successful():
-                return {"success": True, "status": "success", "status_code": None, "error": ""}
-            else:
-                exc = result.result
-                error_msg = str(exc) if exc else "Task failed"
-                attempt = WebhookDeliveryLog.objects.filter(
-                    subscription=webhook,
-                    event=event,
-                ).order_by("-attempt_number").first()
-                status_code = getattr(attempt, "status_code", None)
-                return {"success": False, "status": "failed", "status_code": status_code, "error": error_msg}
-        except Exception as exc:
-            return {"success": False, "status": "error", "status_code": None, "error": str(exc)}
-
-    def _write_report(self, report: dict, path: str):
+    def _write_report(self, report: dict, path: str) -> None:
         out_path = Path(path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, default=str)
+        with open(out_path, "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, default=str)
         self.stdout.write(self.style.SUCCESS(f"Report written to {out_path}"))

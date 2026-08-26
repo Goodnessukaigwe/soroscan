@@ -65,7 +65,18 @@ python manage.py seed_database --clear
 
 ## Local Event Replay (`replay_events`)
 
-Replay ContractEvent records through webhook delivery for debugging and retesting.
+Replay stored `ContractEvent` rows through existing webhook delivery (`dispatch_webhook`)
+or event processing (`process_new_event`). Events are fetched via the Django ORM and
+always dispatched in **original timestamp** order. Delivery status is tracked in the
+command summary, optional JSON report, and `WebhookDeliveryLog` rows.
+
+The command uses whichever database/broker Django is configured for, so the same
+utility works locally and remotely:
+
+| Environment | How to point Django at it | `--environment` flag |
+| --- | --- | --- |
+| Local laptop / docker-compose | `DATABASE_URL` / `REDIS_URL` from `.env` | `local` (default) — runs Celery tasks with `apply()` so status is known immediately |
+| Remote staging/production | Point `DATABASE_URL` / `REDIS_URL` at the remote services | `remote` — enqueues with `delay()` onto the remote Celery workers |
 
 ```bash
 cd django-backend
@@ -76,9 +87,19 @@ Basic replay (dispatches to all active webhooks):
 python manage.py replay_events --contract=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ2KZ --limit=10
 ```
 
-Dry run preview:
+Dry run preview (no HTTP calls):
 ```bash
 python manage.py replay_events --contract=CAAAA... --dry-run
+```
+
+Replay against remote workers while preserving original timestamps:
+```bash
+python manage.py replay_events --contract=CAAAA... --environment=remote --limit=25
+```
+
+Re-run full event processing (webhooks + alerts + CDC) instead of webhook-only:
+```bash
+python manage.py replay_events --contract=CAAAA... --target=processing --limit=10
 ```
 
 Filter by event type:
@@ -91,9 +112,14 @@ Filter by ledger range:
 python manage.py replay_events --contract=CAAAA... --from-ledger=100 --to-ledger=1000
 ```
 
-Filter by date range:
+Filter by original event timestamp range:
 ```bash
 python manage.py replay_events --contract=CAAAA... --from-date=2025-01-01 --to-date=2025-01-31
+```
+
+Replay a single stored event:
+```bash
+python manage.py replay_events --contract=CAAAA... --event-id=42
 ```
 
 Replay to a single webhook:
@@ -101,10 +127,19 @@ Replay to a single webhook:
 python manage.py replay_events --contract=CAAAA... --webhook-id=3
 ```
 
-Write report to JSON:
+Sleep between events using the original timestamp gaps (capped by `--max-delay`):
+```bash
+python manage.py replay_events --contract=CAAAA... --realtime --max-delay=5 --limit=20
+```
+
+Write delivery-status report to JSON:
 ```bash
 python manage.py replay_events --contract=CAAAA... --output-json=replay_report.json
 ```
+
+Replay deliveries include the original event timestamp in the payload (`timestamp`)
+and send `X-SoroScan-Original-Timestamp` / `X-SoroScan-Replay` headers. Deduplication
+is skipped for replay so the same historical event can be retested.
 
 ---
 
