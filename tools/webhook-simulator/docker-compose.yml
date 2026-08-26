@@ -1,0 +1,14 @@
+services:
+  webhook-simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: soroscan-webhook-simulator:local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SOROSCAN_WEBHOOK_SECRET: ${SOROSCAN_WEBHOOK_SECRET:-test-secret}
+      SOROSCAN_WEBHOOK_URL: ${SOROSCAN_WEBHOOK_URL:-}
+      WEBHOOK_ED25519_SIGNING_SEED: ${WEBHOOK_ED25519_SIGNING_SEED:-}
+    volumes:
+      - ./examples:/examples:ro

@@ -171,6 +171,24 @@ services:
     networks:
       - soroscan-network
 
+  webhook-simulator:
+    profiles: ["tools"]
+    build:
+      context: ./tools/webhook-simulator
+      dockerfile: Dockerfile
+    image: soroscan-webhook-simulator:local
+    container_name: soroscan-webhook-simulator
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SOROSCAN_WEBHOOK_SECRET: ${SOROSCAN_WEBHOOK_SECRET:-test-secret}
+      SOROSCAN_WEBHOOK_URL: ${SOROSCAN_WEBHOOK_URL:-}
+      WEBHOOK_ED25519_SIGNING_SEED: ${WEBHOOK_ED25519_SIGNING_SEED:-}
+    volumes:
+      - ./tools/webhook-simulator/examples:/examples:ro
+    networks:
+      - soroscan-network
+
   frontend:
     user: root
     build:

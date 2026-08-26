@@ -196,3 +196,26 @@ Once a webhook has been suspended:
      -d '{"status": "active"}'
    ```
 3. You can also manually trigger retries of failed deliveries in the administrative dashboard's dead-letter queue.
+
+---
+
+## 🧪 Local Webhook Simulator
+
+You can exercise a receiver **without** running Django, Celery, Redis, or PostgreSQL. The standalone simulator in `tools/webhook-simulator/` POSTs the same JSON envelope and HMAC headers as production `dispatch_webhook`.
+
+```bash
+cd tools/webhook-simulator
+pip install -e .
+python examples/receiver.py
+# in another terminal
+webhook-simulator --url http://127.0.0.1:8080/webhook --sample --secret test-secret
+```
+
+Docker (hits a listener on the host):
+
+```bash
+docker compose -f tools/webhook-simulator/docker-compose.yml run --rm webhook-simulator \
+  --url http://host.docker.internal:8080/webhook --sample --secret test-secret
+```
+
+The CLI prints delivery status, HTTP status, latency, acknowledgement (`X-SoroScan-Ack`), response headers, and a truncated response body. Use `--output json` for a machine-readable result, `--dry-run` to inspect the signed request, and `--help` for retries and Ed25519 (`X-Signature`) options. See `tools/webhook-simulator/README.md` for the full payload contract.

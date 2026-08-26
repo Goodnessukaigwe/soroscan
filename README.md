@@ -100,6 +100,25 @@ That's it! The stack auto-runs migrations on startup and supports live code relo
 
 **Port Conflicts?** Edit `django-backend/.env` and uncomment the port override variables.
 
+### Local Webhook Simulator
+
+Test a webhook receiver without the Django backend, Celery, Redis, or PostgreSQL. The simulator in `tools/webhook-simulator/` sends the same JSON envelope and HMAC headers as production deliveries.
+
+```bash
+cd tools/webhook-simulator
+pip install -e .
+webhook-simulator --url http://127.0.0.1:8080/webhook --sample --secret test-secret
+```
+
+Docker:
+
+```bash
+docker compose -f tools/webhook-simulator/docker-compose.yml run --rm webhook-simulator \
+  --url http://host.docker.internal:8080/webhook --sample --secret test-secret
+```
+
+See [tools/webhook-simulator/README.md](tools/webhook-simulator/README.md) and the [webhooks cookbook](docs/cookbook/webhooks.md).
+
 ### Manual Setup (Advanced)
 
 <details>

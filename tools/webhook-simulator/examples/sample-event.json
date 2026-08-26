@@ -1,0 +1,12 @@
+{
+  "contract_id": "CCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "event_type": "transfer",
+  "payload": {
+    "from": "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567AAAAAAAAAAAAAA",
+    "to": "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567BBBBBBBBBBBBBB",
+    "amount": "10000000"
+  },
+  "ledger": 123456,
+  "event_index": 0,
+  "tx_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

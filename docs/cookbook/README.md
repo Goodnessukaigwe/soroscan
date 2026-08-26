@@ -20,6 +20,7 @@ Learn how to react to on-chain events in real-time with webhooks:
 * Database sync trigger
 * External API call
 * Retry logic implementation
+* Local webhook simulator (no backend required)
 
 ### 3. [Data Analysis Examples](./data-analysis.md)
 Explore ways to analyze smart contract data:

@@ -1,0 +1,53 @@
+name: Webhook Simulator CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/webhook-simulator/**"
+      - ".github/workflows/webhook-simulator.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "tools/webhook-simulator/**"
+      - ".github/workflows/webhook-simulator.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/webhook-simulator
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tools/webhook-simulator/pyproject.toml
+
+      - name: Install package and test extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: python -m ruff check .
+
+      - name: Run pytest
+        run: python -m pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build simulator image
+        run: docker build -t soroscan-webhook-simulator:ci ./tools/webhook-simulator
+
+      - name: Show CLI help from the image
+        run: docker run --rm soroscan-webhook-simulator:ci --help
