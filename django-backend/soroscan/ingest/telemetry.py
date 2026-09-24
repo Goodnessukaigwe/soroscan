@@ -92,3 +92,4 @@ def inject_trace_headers(headers: dict[str, str]) -> None:
             headers["traceparent"] = f"00-{span_ctx.trace_id:032x}-{span_ctx.span_id:016x}-{span_ctx.trace_flags:02x}"
         else:
             headers["traceparent"] = "00-00000000000000000000000000000001-0000000000000001-01"
+

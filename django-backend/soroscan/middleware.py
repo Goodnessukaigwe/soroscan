@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 slow_query_logger = logging.getLogger("soroscan.slow_queries")
 
 
+
 class TraceContextMiddleware(MiddlewareMixin):
     """
     Extract incoming W3C traceparent headers or generate a new trace ID to propagate 

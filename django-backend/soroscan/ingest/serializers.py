@@ -848,7 +848,6 @@ class BulkMetadataImportSerializer(serializers.Serializer):
         help_text="Raw CSV/JSON body when not uploading a file",
     )
 
-
 class ContractMetadataSerializer(serializers.ModelSerializer):
     contract_id = serializers.CharField(source="contract.contract_id", read_only=True)
 
@@ -871,5 +870,4 @@ class BulkContractMetadataRequestSerializer(serializers.Serializer):
         allow_empty=False,
         max_length=50,
     )
-
 

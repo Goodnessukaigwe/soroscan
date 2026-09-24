@@ -16,7 +16,6 @@ spec:
           for: 5m
           labels:
             severity: warning
-            service: soroscan-backend
           annotations:
             summary: "SoroScan API error rate exceeds the 1% SLA threshold"
             description: "5xx responses are above 1% for service {{ $labels.service }}."
@@ -29,7 +28,6 @@ spec:
           for: 2m
           labels:
             severity: critical
-            service: soroscan-backend
           annotations:
             summary: "SoroScan API critical error rate exceeds 5%"
             description: "5xx responses are above 5% for service {{ $labels.service }}."

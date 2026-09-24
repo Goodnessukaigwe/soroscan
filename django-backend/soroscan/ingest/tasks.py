@@ -932,12 +932,10 @@ def dispatch_webhook(self, subscription_id: int, event_id: int, replay: bool = F
             "Content-Type": "application/json",
             "X-SoroScan-Timestamp": timezone.now().isoformat(),
         }
-        
         ctx = log_context_var.get()
         traceparent = ctx.get("traceparent")
         if traceparent:
             headers["traceparent"] = traceparent
-
         with tracer.start_as_current_span(
             "webhook.sign", attributes={"webhook_id": subscription_id}
         ):
@@ -3719,6 +3717,100 @@ def _check_single_contract_health(contract: TrackedContract, now=None, cutoff_1h
     else:
         new_status = ContractHealthCheck.Status.HEALTHY
         msg = ""
+                WebhookDeliveryLog.STATUS_FAILED,
+                WebhookDeliveryLog.STATUS_DEAD_LETTER,
+            ]
+        ).count()
+        ratio = (failed / total * 100.0) if total > 0 else 0.0
+        triggered = failed >= failure_threshold or (
+            total >= failure_threshold and ratio >= failure_ratio_percent
+        )
+        return (
+            triggered,
+            {
+                "type": condition_type,
+                "window_minutes": window_minutes,
+                "failure_threshold": failure_threshold,
+                "failure_ratio_percent": failure_ratio_percent,
+                "total": total,
+                "failed": failed,
+                "ratio": ratio,
+                "playbook": "docs/deployment/playbooks/webhook-delivery-failure-burst.md",
+            },
+        )
+
+    if condition_type == RemediationRule.CONDITION_DB_POOL_EXHAUSTED:
+        from django.db import connection
+        from soroscan.db_pool import calculate_pool_limits
+        from soroscan.meta_views import (
+            _collect_fallback_pool_stats,
+            _collect_postgres_pool_stats,
+        )
+
+        utilization_percent = float(condition.get("utilization_percent", 90))
+        try:
+            if connection.vendor == "postgresql":
+                stats = _collect_postgres_pool_stats(connection)
+            else:
+                stats = _collect_fallback_pool_stats(connection)
+            _, max_conn = calculate_pool_limits()
+            max_conn = max(int(max_conn or 0), 1)
+            active = int(stats.get("active") or 0)
+            total = int(stats.get("total") or 0)
+            # Prefer total in-use connections against configured pool max.
+            usage = (total / max_conn) * 100.0
+            triggered = usage >= utilization_percent
+            return (
+                triggered,
+                {
+                    "type": condition_type,
+                    "utilization_percent": utilization_percent,
+                    "usage": usage,
+                    "active_connections": active,
+                    "total_connections": total,
+                    "max_connections": max_conn,
+                    "playbook": "docs/deployment/playbooks/database-connection-pool-exhausted.md",
+                },
+            )
+        except Exception as exc:
+            logger.warning("DB pool check failed: %s", exc)
+            return (
+                False,
+                {
+                    "type": condition_type,
+                    "error": str(exc),
+                    "playbook": "docs/deployment/playbooks/database-connection-pool-exhausted.md",
+                },
+            )
+
+    if condition_type == RemediationRule.CONDITION_RPC_UNAVAILABLE:
+        from .models import IngestError
+
+        window_minutes = int(condition.get("window_minutes", 10))
+        min_errors = int(condition.get("min_errors", 5))
+        cutoff = now - timedelta(minutes=window_minutes)
+        qs = IngestError.objects.filter(
+            error_type=IngestError.ErrorType.RPC_ERROR,
+            created_at__gte=cutoff,
+        )
+        if contract is not None:
+            qs = qs.filter(contract_id=contract.contract_id)
+        count = qs.count()
+        triggered = count >= min_errors
+        return (
+            triggered,
+            {
+                "type": condition_type,
+                "window_minutes": window_minutes,
+                "min_errors": min_errors,
+                "rpc_errors": count,
+                "playbook": "docs/deployment/playbooks/rpc-endpoint-unavailable.md",
+            },
+        )
+
+    logger.warning("Unknown remediation condition type for rule=%s", rule.id)
+    return (False, {"type": condition_type, "error": "unknown_condition_type"})
+>>>>>>> main
 
     health.status = new_status
     health.minutes_since_last_event = minutes_since
@@ -4096,3 +4188,18 @@ def cleanup_silk_data(days_to_keep: int = 7) -> int:
 
 
 
+    logger.info(
+        "Health alert sent for contract %s (status=%s)",
+        contract_id,
+        status,
+        extra={"contract_id": contract_id, "health_status": status},
+    )
+    return "sent"
+
+
+@shared_task(bind=True, max_retries=0)
+def run_webhook_replay_job(self, job_id: int) -> dict[str, Any]:
+    """Celery entrypoint for webhook replay jobs (issue #1329)."""
+    from soroscan.ingest.services.webhook_replay import run_replay_job
+
+    return run_replay_job(job_id)
