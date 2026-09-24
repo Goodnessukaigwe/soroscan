@@ -3,8 +3,10 @@
 import math
 import time
 
+from asgiref.sync import sync_to_async
 from django.core.cache import cache
 from django.http import JsonResponse
+from django.utils.deprecation import MiddlewareMixin
 
 from soroscan.ingest.models import APIKey
 
@@ -13,29 +15,26 @@ WINDOW_SECONDS = 3600
 CACHE_PREFIX = "soroscan_tier_sliding_window"
 
 
-class TieredAPIKeyRateLimitMiddleware:
+class TieredAPIKeyRateLimitMiddleware(MiddlewareMixin):
     """Enforce Free/Pro/Enterprise quotas using a one-hour sliding window."""
 
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def __call__(self, request):
+    async def __call__(self, request):
         raw_key = request.headers.get("X-API-Key")
         if not raw_key:
-            return self.get_response(request)
+            return await self.get_response(request)
 
-        api_key = self._get_api_key(raw_key)
+        api_key = await sync_to_async(self._get_api_key)(raw_key)
         if api_key is None:
-            return self.get_response(request)
+            return await self.get_response(request)
 
-        tier = self._effective_tier(api_key)
+        tier = await sync_to_async(self._effective_tier)(api_key)
         limit = APIKey.TIER_QUOTAS.get(
             tier,
             APIKey.TIER_QUOTAS[APIKey.Tier.FREE],
         )
 
         if limit is None:
-            return self.get_response(request)
+            return await self.get_response(request)
 
         now = time.time()
         cache_key = f"{CACHE_PREFIX}:{api_key.pk}"
@@ -69,7 +68,7 @@ class TieredAPIKeyRateLimitMiddleware:
         ttl = max(1, reset_at - math.floor(now))
         cache.set(cache_key, history, timeout=ttl)
 
-        response = self.get_response(request)
+        response = await self.get_response(request)
         self._set_headers(
             response,
             limit=limit,

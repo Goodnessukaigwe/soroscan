@@ -162,8 +162,8 @@ class CelerySignalHandlerTests(TestCase):
         sender = MagicMock()
         sender.name = task_name
 
-        with patch("soroscan.celery.set_task_id"):
-            set_celery_task_context(sender=sender, task_id="test-prerun-id")
+        with patch("soroscan.log_context.set_task_id"):
+            set_celery_task_context(sender=sender, task_id="task-123")
 
         after = self._get_tasks_active(task_name)
         self.assertGreater(after, before)
@@ -236,11 +236,11 @@ class CeleryDurationTests(TestCase):
 
 class CeleryStatusViewTests(TestCase):
     def _get(self, url: str, user: Any = None):
-        from django.test import Client
+        from rest_framework.test import APIClient
 
-        client = Client()
+        client = APIClient()
         if user:
-            client.force_login(user)
+            client.force_authenticate(user=user)
         return client.get(url)
 
     def test_endpoint_requires_authentication(self):

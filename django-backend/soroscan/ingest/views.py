@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_control, cache_page
+from django.views.decorators.vary import vary_on_headers
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, inline_serializer, OpenApiParameter
 from rest_framework import renderers, serializers, status, viewsets
@@ -152,14 +153,25 @@ class TrackedContractViewSet(viewsets.ModelViewSet):
                     warnings.append(warning)
         return warnings
 
-    @method_decorator(cache_page(query_cache_ttl(), key_prefix="contract_list"))
     @method_decorator(cache_control(max_age=query_cache_ttl()))
     def list(self, request, *args, **kwargs):
-        """Cache the contracts list via @cache_page (issue #1011)."""
-        response = super().list(request, *args, **kwargs)
-        if isinstance(response.data, dict) and "results" in response.data:
-            response.data["warnings"] = self._collect_warnings(response.data["results"])
-        return response
+        """Cache the contracts list per user (issue #1011)."""
+        user_id = request.user.id if request.user and request.user.is_authenticated else "anon"
+        page = request.query_params.get("page", "1")
+        page_size = request.query_params.get("page_size", "default")
+        is_active = request.query_params.get("is_active", "all")
+        search = request.query_params.get("search", "")
+        ordering = request.query_params.get("ordering", "")
+        cache_key = f"contract_list_user_{user_id}_p{page}_s{page_size}_a{is_active}_q{search}_o{ordering}"
+
+        def _build():
+            response = super(TrackedContractViewSet, self).list(request, *args, **kwargs)
+            if isinstance(response.data, dict) and "results" in response.data:
+                response.data["warnings"] = self._collect_warnings(response.data["results"])
+            return response.data
+
+        data = get_or_set_json(cache_key, query_cache_ttl(), _build)
+        return Response(data)
 
     def retrieve(self, request, *args, **kwargs):
         response = super().retrieve(request, *args, **kwargs)
@@ -683,24 +695,20 @@ class ContractEventViewSet(viewsets.ReadOnlyModelViewSet):
         # --- free-text substring search against JSON cast to text -------------
         q = request.GET.get("q", "").strip()
         if q:
-            # Cast JSON payload to text and do a case-insensitive contains search.
-            # The GIN index speeds up JSON containment (@>) queries; for plain text
-            # search we rely on PostgreSQL's icontains on the cast.
             from django.db.models import TextField
             qs = qs.annotate(
-                _payload_text=Cast("payload", output_field=TextField())
-            ).filter(_payload_text__icontains=q)
+                _decoded_payload_text=Cast("decoded_payload", output_field=TextField()),
+            ).filter(_decoded_payload_text__icontains=q)
 
         # --- payload_contains: JSON containment using GIN index ---------------
         payload_contains = request.GET.get("payload_contains", "").strip()
         if payload_contains:
-            # Simple text containment inside the JSON; works with GIN index
             from django.db.models import TextField
             if not q:  # avoid double annotation
                 qs = qs.annotate(
-                    _payload_text=Cast("payload", output_field=TextField())
+                    _decoded_payload_text=Cast("decoded_payload", output_field=TextField()),
                 )
-            qs = qs.filter(_payload_text__icontains=payload_contains)
+            qs = qs.filter(_decoded_payload_text__icontains=payload_contains)
 
         # --- payload_field / payload_op / payload_value -----------------------
         payload_field = request.GET.get("payload_field", "").strip()
@@ -3726,6 +3734,8 @@ def celery_status_view(request):
         },
         status=status.HTTP_200_OK,
     )
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def dlq_list_view(request):
     """List dead-letter queue entries (admin only)."""
     if not request.user.is_staff:

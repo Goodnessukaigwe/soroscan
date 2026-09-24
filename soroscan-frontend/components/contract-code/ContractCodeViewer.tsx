@@ -187,7 +187,7 @@ export function ContractCodeViewer({
                       {line.map((token, tokenIdx) => {
                         const { key: tokenKey, ...tokenProps } = getTokenProps({ token });
                         return (
-                          <span key={tokenIdx} {...tokenProps} />
+                          <span key={tokenIdx} {...tokenProps}>{token.content}</span>
                         );
                       })}
                     </span>

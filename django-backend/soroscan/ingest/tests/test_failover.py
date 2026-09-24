@@ -35,7 +35,7 @@ def api_client():
 
 
 def assert_readiness_healthy(response):
-    assert response.status_code == status.HTTP_200_OK
+    assert response.status_code == status.HTTP_200_OK, f"Expected 200 but got {response.status_code}: {response.data}"
     assert response.data["status"] == "healthy"
     assert response.data["components"]["database"] == "healthy"
     assert response.data["components"]["redis"] == "healthy"

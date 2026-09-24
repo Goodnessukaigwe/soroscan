@@ -50,7 +50,7 @@ describe("AppShell mobile navigation", () => {
       </AppShell>,
     );
 
-    expect(screen.getByText("◆ SoroScan")).toBeInTheDocument();
+    expect(screen.getByAltText("SoroScan Logo")).toBeInTheDocument();
   });
 
   it("shows hamburger toggle on mobile layout", () => {

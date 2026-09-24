@@ -848,3 +848,28 @@ class BulkMetadataImportSerializer(serializers.Serializer):
         help_text="Raw CSV/JSON body when not uploading a file",
     )
 
+
+class ContractMetadataSerializer(serializers.ModelSerializer):
+    contract_id = serializers.CharField(source="contract.contract_id", read_only=True)
+
+    class Meta:
+        model = ContractMetadata
+        fields = [
+            "contract_id",
+            "name",
+            "description",
+            "tags",
+            "documentation_url",
+            "github_repo",
+            "team_email",
+        ]
+
+
+class BulkContractMetadataRequestSerializer(serializers.Serializer):
+    contract_ids = serializers.ListField(
+        child=serializers.CharField(max_length=255),
+        allow_empty=False,
+        max_length=50,
+    )
+
+

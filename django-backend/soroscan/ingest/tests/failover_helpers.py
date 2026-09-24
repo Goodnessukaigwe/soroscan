@@ -26,10 +26,7 @@ def database_unavailable(message: str = "DB connection refused"):
 
 @contextmanager
 def redis_unavailable(message: str = "Redis down"):
-    def _fail(*args, **kwargs):
-        raise Exception(message)
-
-    with patch.object(cache, "set", side_effect=_fail):
+    with patch("soroscan.health.redis_lib.Redis.from_url", side_effect=Exception(message)):
         yield
 
 
@@ -45,7 +42,12 @@ def rpc_healthy():
     mock_response.status_code = 200
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = {"result": {"status": "healthy"}}
-    with patch("soroscan.health.requests.post", return_value=mock_response):
+
+    mock_redis = MagicMock()
+    mock_redis.ping.return_value = True
+
+    with patch("soroscan.health.requests.post", return_value=mock_response), \
+         patch("soroscan.health.redis_lib.Redis.from_url", return_value=mock_redis):
         yield
 
 

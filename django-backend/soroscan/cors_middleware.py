@@ -41,6 +41,7 @@ from typing import Optional
 
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse
+from django.utils.deprecation import MiddlewareMixin
 
 logger = logging.getLogger(__name__)
 
@@ -53,35 +54,31 @@ _org_origins_cache: dict[str, bool] = {}
 _org_origins_cache_loaded_at: float = 0.0
 
 
-def _load_org_origins() -> dict[str, bool]:
+def _get_org_origins() -> dict[str, bool]:
     """
     Read cors_origins from every Organization row and return a set-like dict.
     Falls back to an empty dict on any DB error so the middleware never breaks
     a request.
     """
-    try:
-        from soroscan.ingest.models import Organization  # avoid circular import
-
-        origins: dict[str, bool] = {}
-        for row in Organization.objects.values_list("cors_origins", flat=True):
-            if isinstance(row, list):
-                for origin in row:
-                    if isinstance(origin, str) and origin:
-                        origins[origin.rstrip("/")] = True
-        return origins
-    except Exception:
-        logger.exception("OrgCorsMiddleware: failed to load org CORS origins from DB")
-        return {}
-
-
-def _get_org_origins() -> dict[str, bool]:
-    """Return cached org origins, refreshing when the TTL has elapsed."""
     global _org_origins_cache, _org_origins_cache_loaded_at
+    now = time.time()
+    if now - _org_origins_cache_loaded_at < ORG_CORS_CACHE_TTL:
+        return _org_origins_cache
 
-    now = time.monotonic()
-    if now - _org_origins_cache_loaded_at > ORG_CORS_CACHE_TTL:
-        _org_origins_cache = _load_org_origins()
+    try:
+        from soroscan.ingest.models import Organization
+
+        origins: set[str] = set()
+        for org in Organization.objects.all():
+            for origin in org.cors_origins or []:
+                origin_clean = origin.strip().rstrip("/")
+                if origin_clean:
+                    origins.add(origin_clean)
+        _org_origins_cache = {o: True for o in origins}
         _org_origins_cache_loaded_at = now
+    except Exception as exc:
+        logger.warning("Failed to refresh org CORS cache: %s", exc)
+
     return _org_origins_cache
 
 
@@ -113,7 +110,7 @@ def _apply_cors_headers(response: HttpResponse, origin: str, is_preflight: bool)
         response["Access-Control-Max-Age"] = "86400"
 
 
-class OrgCorsMiddleware:
+class OrgCorsMiddleware(MiddlewareMixin):
     """
     Supplement django-cors-headers with per-organization allowed origins.
 
@@ -123,40 +120,30 @@ class OrgCorsMiddleware:
     - The origin IS present in at least one Organization.cors_origins list.
     """
 
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def __call__(self, request: HttpRequest) -> HttpResponse:
+    def process_request(self, request: HttpRequest) -> Optional[HttpResponse]:
         origin: Optional[str] = request.META.get("HTTP_ORIGIN")
-
-        # Fast path: no Origin header means same-origin or non-browser request.
         if not origin:
-            return self.get_response(request)
+            return None
 
         origin = origin.rstrip("/")
-        is_preflight = request.method == "OPTIONS"
-
-        # If the global settings already cover this origin, let CorsHeaders
-        # deal with it entirely – we have nothing to add.
         if _is_global_origin_allowed(origin):
-            return self.get_response(request)
+            return None
 
-        # Check per-org origins.
         org_origins = _get_org_origins()
         if origin not in org_origins:
-            # Not in any org's list either; proceed normally (CORS will be
-            # rejected by the browser, which is the correct behaviour).
-            return self.get_response(request)
+            return None
 
-        # The origin is org-approved.  Handle preflights immediately without
-        # calling down the chain to avoid touching the DB / auth unnecessarily.
-        if is_preflight:
+        request._org_cors_origin = origin
+        if request.method == "OPTIONS":
             response = HttpResponse(status=200)
             _apply_cors_headers(response, origin, is_preflight=True)
             return response
+        return None
 
-        response = self.get_response(request)
-        _apply_cors_headers(response, origin, is_preflight=False)
+    def process_response(self, request: HttpRequest, response: HttpResponse) -> HttpResponse:
+        origin = getattr(request, "_org_cors_origin", None)
+        if origin and request.method != "OPTIONS":
+            _apply_cors_headers(response, origin, is_preflight=False)
         return response
 
 

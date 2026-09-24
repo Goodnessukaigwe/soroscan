@@ -66,6 +66,15 @@ from .models import (
     OrganizationBudget,
     OrganizationCostSnapshot,
     WebhookDeadLetter,
+    ContractHealthCheck,
+    ContractDeployment,
+    ContractVerification,
+    ContractSource,
+    WebhookDeliveryLog,
+    IngestError,
+    DataRetentionPolicy,
+    DataDeletionRequest,
+    PIIField,
 )
 from stellar_sdk import SorobanServer
 from .rate_limit import check_ingest_rate
@@ -85,9 +94,12 @@ _task_profilers: dict[str, tuple] = {}
 
 @task_prerun.connect
 def _start_task_profiling(task_id: str, task, **kwargs) -> None:
-    profiler = cProfile.Profile()
-    profiler.enable()
-    _task_profilers[task_id] = (profiler, time.monotonic())
+    try:
+        profiler = cProfile.Profile()
+        profiler.enable()
+        _task_profilers[task_id] = (profiler, time.monotonic())
+    except ValueError:
+        pass
 
 
 @task_postrun.connect
@@ -3669,3 +3681,418 @@ def replay_dead_letter(self, dead_letter_id: int) -> dict[str, Any]:
         extra={"dlq_id": dead_letter_id, "webhook_id": subscription.id, "event_id": dlq.event.id},
     )
     return {"status": "replayed", "dlq_id": dead_letter_id}
+
+
+def _check_single_contract_health(contract: TrackedContract, now=None, cutoff_1h=None) -> tuple[str, str]:
+    """
+    Checks and updates health status for a single contract.
+    Returns (status, error_message).
+    """
+    if now is None:
+        now = timezone.now()
+    if cutoff_1h is None:
+        cutoff_1h = now - timedelta(hours=1)
+
+    last_event = ContractEvent.objects.filter(contract=contract).order_by("-timestamp").first()
+    if last_event:
+        last_event_time = last_event.timestamp
+    else:
+        last_event_time = contract.created_at
+
+    minutes_since = int((now - last_event_time).total_seconds() / 60) if last_event_time else 0
+
+    decode_errors_1h = ContractEvent.objects.filter(
+        contract=contract,
+        timestamp__gte=cutoff_1h,
+        decoding_status="failed",
+    ).count()
+
+    health, _ = ContractHealthCheck.objects.get_or_create(contract=contract)
+    old_status = health.status
+
+    if minutes_since > 120:
+        new_status = ContractHealthCheck.Status.FAILED
+        msg = f"No events for {minutes_since} minutes"
+    elif minutes_since > 30 or decode_errors_1h >= 5:
+        new_status = ContractHealthCheck.Status.DEGRADED
+        msg = f"No events for {minutes_since} minutes" if minutes_since > 30 else f"{decode_errors_1h} ABI decode errors in last hour"
+    else:
+        new_status = ContractHealthCheck.Status.HEALTHY
+        msg = ""
+
+    health.status = new_status
+    health.minutes_since_last_event = minutes_since
+    health.abi_decode_errors_1h = decode_errors_1h
+    health.error_message = msg
+    if new_status in (ContractHealthCheck.Status.FAILED, ContractHealthCheck.Status.DEGRADED):
+        health.consecutive_failures += 1
+    elif new_status == ContractHealthCheck.Status.HEALTHY:
+        health.consecutive_failures = 0
+    health.last_checked_at = now
+    health.save()
+
+    if old_status == ContractHealthCheck.Status.HEALTHY and new_status in (
+        ContractHealthCheck.Status.DEGRADED,
+        ContractHealthCheck.Status.FAILED,
+    ):
+        send_health_alert.delay(contract.contract_id, new_status, msg)
+
+    return new_status, msg
+
+
+@shared_task
+def check_contract_health() -> dict[str, Any]:
+    """
+    Evaluates health status for all active tracked contracts.
+    Updates or creates ContractHealthCheck records and sends alerts on status degradation.
+    """
+    checked_count = 0
+    healthy_count = 0
+    degraded_count = 0
+    failed_count = 0
+    errors = []
+
+    now = timezone.now()
+    cutoff_1h = now - timedelta(hours=1)
+
+    contracts = TrackedContract.objects.filter(is_active=True, is_paused=False)
+    for contract in contracts:
+        checked_count += 1
+        try:
+            new_status, _ = _check_single_contract_health(contract=contract, now=now, cutoff_1h=cutoff_1h)
+            if new_status == ContractHealthCheck.Status.HEALTHY:
+                healthy_count += 1
+            elif new_status == ContractHealthCheck.Status.DEGRADED:
+                degraded_count += 1
+            else:
+                failed_count += 1
+        except Exception as e:
+            logger.error("Error checking health for contract %s: %s", contract.contract_id, e)
+            errors.append({"contract_id": contract.contract_id, "error": str(e)})
+
+    return {
+        "checked": checked_count,
+        "healthy": healthy_count,
+        "degraded": degraded_count,
+        "failed": failed_count,
+        "errors": errors,
+    }
+
+
+@shared_task
+def send_health_alert(contract_id: str, status: str, message: str) -> str:
+    """
+    Sends an in-app notification when contract health degrades.
+    """
+    try:
+        contract = TrackedContract.objects.select_related("owner").get(contract_id=contract_id)
+    except TrackedContract.DoesNotExist:
+        return "skipped:contract_gone"
+
+    from soroscan.ingest.services.notifications import create_and_push
+    if contract.owner:
+        create_and_push(
+            user=contract.owner,
+            title=f"Contract Health Alert: {status.upper()}",
+            message=f"Contract '{contract.name or contract.contract_id}' status changed to {status}: {message}",
+            link=f"/contracts/{contract.contract_id}",
+            notification_type="contract_health",
+        )
+    return "sent"
+
+
+@shared_task
+def detect_contract_upgrades() -> dict[str, int]:
+    """
+    Detects contract deployments and upgrades by checking verified bytecode hashes against existing ContractDeployment records.
+    """
+    new_deployments = 0
+    upgrades_detected = 0
+
+    verifications = ContractVerification.objects.filter(
+        status=ContractVerification.Status.VERIFIED
+    ).select_related("contract")
+
+    for ver in verifications:
+        contract = ver.contract
+        bytecode_hash = ver.bytecode_hash
+        if not bytecode_hash:
+            continue
+
+        existing = ContractDeployment.objects.filter(contract=contract, bytecode_hash=bytecode_hash).first()
+        if existing:
+            continue
+
+        prev_deployment = ContractDeployment.objects.filter(contract=contract).first()
+        is_upgrade = prev_deployment is not None
+
+        ContractDeployment.objects.create(
+            contract=contract,
+            bytecode_hash=bytecode_hash,
+            ledger_deployed=0,
+            is_upgrade=is_upgrade,
+        )
+
+        if is_upgrade:
+            upgrades_detected += 1
+        else:
+            new_deployments += 1
+
+    return {"new_deployments": new_deployments, "upgrades_detected": upgrades_detected}
+
+
+def _detect_anomaly(rule: RemediationRule, contract: TrackedContract) -> tuple[bool, dict[str, Any]]:
+    """
+    Evaluates a single RemediationRule condition against a contract.
+    Returns (triggered, snapshot_dict).
+    """
+    cond = rule.condition or {}
+    cond_type = cond.get("type")
+    now = timezone.now()
+
+    if cond_type == "no_events_for_minutes" or cond_type == RemediationRule.CONDITION_INGESTION_LAG:
+        minutes = cond.get("minutes", cond.get("window_minutes", 60))
+        last_evt = ContractEvent.objects.filter(contract=contract).order_by("-timestamp").first()
+        if last_evt:
+            last_event = last_evt.timestamp
+        else:
+            last_event = contract.last_event_at
+
+        diff_minutes = (now - last_event).total_seconds() / 60 if last_event else 999999
+        if diff_minutes >= minutes:
+            return True, {"type": cond_type, "minutes_since": diff_minutes}
+        return False, {"type": cond_type, "minutes_since": diff_minutes}
+
+    elif cond_type == RemediationRule.CONDITION_WEBHOOK_FAILURE_BURST:
+        window_minutes = cond.get("window_minutes", 60)
+        threshold = cond.get("failure_threshold", 3)
+        cutoff = now - timedelta(minutes=window_minutes)
+        failures = WebhookDeliveryLog.objects.filter(
+            subscription__contract=contract,
+            status=WebhookDeliveryLog.STATUS_FAILED,
+            timestamp__gte=cutoff,
+        ).count()
+        if failures >= threshold:
+            return True, {"type": cond_type, "failed": failures}
+        return False, {"type": cond_type, "failed": failures}
+
+    elif cond_type == RemediationRule.CONDITION_RPC_UNAVAILABLE:
+        window_minutes = cond.get("window_minutes", 60)
+        min_errors = cond.get("min_errors", 3)
+        cutoff = now - timedelta(minutes=window_minutes)
+        rpc_errors = IngestError.objects.filter(
+            contract_id=contract.contract_id,
+            error_type=IngestError.ErrorType.RPC_ERROR,
+            created_at__gte=cutoff,
+        ).count()
+        if rpc_errors >= min_errors:
+            return True, {"type": cond_type, "rpc_errors": rpc_errors}
+        return False, {"type": cond_type, "rpc_errors": rpc_errors}
+
+    return False, {"type": cond_type}
+
+
+@shared_task
+def evaluate_remediation_rules() -> dict[str, int]:
+    """
+    Evaluates enabled RemediationRules, creates/alerts incidents, and executes remediation actions.
+    """
+    detected_count = 0
+    alerted_count = 0
+    executed_count = 0
+    resolved_count = 0
+
+    now = timezone.now()
+
+    rules = RemediationRule.objects.filter(enabled=True)
+    for rule in rules:
+        cond = rule.condition or {}
+        cid = cond.get("contract_id")
+        if cid:
+            contracts = TrackedContract.objects.filter(contract_id=cid)
+        else:
+            contracts = TrackedContract.objects.all()
+
+        for contract in contracts:
+            triggered, snapshot = _detect_anomaly(rule, contract)
+            incident = RemediationIncident.objects.filter(
+                rule=rule, contract=contract, status__in=[RemediationIncident.STATUS_ALERTED, RemediationIncident.STATUS_EXECUTED]
+            ).first()
+
+            if triggered:
+                if not incident:
+                    grace = timedelta(minutes=rule.grace_period_minutes)
+                    incident = RemediationIncident.objects.create(
+                        rule=rule,
+                        contract=contract,
+                        status=RemediationIncident.STATUS_ALERTED,
+                        first_detected_at=now,
+                        action_after_at=now + grace,
+                        anomaly_snapshot=snapshot,
+                    )
+                    detected_count += 1
+
+                    if rule.alert_target:
+                        try:
+                            requests.post(rule.alert_target, json={"rule": rule.name, "contract": contract.contract_id, "snapshot": snapshot}, timeout=5)
+                        except Exception:
+                            pass
+                    alerted_count += 1
+
+                if incident.status == RemediationIncident.STATUS_ALERTED and now >= incident.action_after_at:
+                    if not rule.dry_run:
+                        for action in (rule.actions or []):
+                            atype = action.get("type")
+                            if atype == "pause_contract":
+                                TrackedContract.objects.filter(pk=contract.pk).update(is_active=False)
+                            elif atype == "disable_webhooks":
+                                WebhookSubscription.objects.filter(contract=contract).update(
+                                    is_active=False, status=WebhookSubscription.STATUS_SUSPENDED
+                                )
+                    incident.status = RemediationIncident.STATUS_EXECUTED
+                    incident.executed_at = now
+                    incident.save()
+                    executed_count += 1
+                elif incident.status == RemediationIncident.STATUS_EXECUTED and rule.dry_run:
+                    executed_count += 1
+            else:
+                if incident:
+                    incident.status = RemediationIncident.STATUS_RESOLVED
+                    incident.resolved_at = now
+                    incident.save()
+                    AdminAction.objects.create(
+                        action="remediation_resolved",
+                        object_type="TrackedContract",
+                        object_id=contract.contract_id,
+                        changes={"description": f"Remediation rule '{rule.name}' incident resolved for {contract.contract_id}"},
+                    )
+                    resolved_count += 1
+
+    return {
+        "detected": detected_count,
+        "alerted": alerted_count,
+        "executed": executed_count,
+        "resolved": resolved_count,
+    }
+
+
+@shared_task
+def enforce_retention_policies() -> dict[str, int]:
+    """
+    Enforces data retention policies by deleting events older than retention_days.
+    Returns dict mapping contract_id to count of deleted events.
+    """
+    results = {}
+    policies = DataRetentionPolicy.objects.select_related("contract").all()
+    now = timezone.now()
+
+    for policy in policies:
+        cutoff = now - timedelta(days=policy.retention_days)
+        deleted_count, _ = ContractEvent.objects.filter(
+            contract=policy.contract,
+            timestamp__lt=cutoff,
+        ).delete()
+        if deleted_count > 0:
+            results[policy.contract.contract_id] = deleted_count
+
+    return results
+
+
+@shared_task
+def process_deletion_requests() -> dict[str, dict[str, Any]]:
+    """
+    Processes pending GDPR DataDeletionRequests by scrubbing matching PII fields in payloads.
+    """
+    results = {}
+    pending_status = getattr(DataDeletionRequest, "STATUS_PENDING", "pending")
+    completed_status = getattr(DataDeletionRequest, "STATUS_COMPLETED", "completed")
+
+    pending_requests = DataDeletionRequest.objects.filter(
+        status=pending_status
+    ).prefetch_related("contracts")
+
+    for req in pending_requests:
+        events_scrubbed = 0
+        subject = req.subject_identifier
+
+        contracts = req.contracts.all()
+        for contract in contracts:
+            pii_fields = PIIField.objects.filter(contract=contract)
+            for pii in pii_fields:
+                field_path = pii.field_path
+                events = ContractEvent.objects.filter(contract=contract)
+                if pii.event_type:
+                    events = events.filter(event_type=pii.event_type)
+
+                for event in events:
+                    if isinstance(event.payload, dict) and event.payload.get(field_path) == subject:
+                        event.payload[field_path] = "[DELETED]"
+                        event.save(update_fields=["payload"])
+                        events_scrubbed += 1
+
+        req.status = completed_status
+        req.completed_at = timezone.now()
+        req.save(update_fields=["status", "completed_at"])
+
+        results[str(req.pk)] = {"status": "completed", "events_deleted": events_scrubbed}
+
+    return results
+
+
+@shared_task
+def archive_old_events() -> dict[str, int]:
+    """
+    Archives and deletes events older than retention_days according to DataRetentionPolicy rules.
+    Returns {"archived": archived_count, "deleted": deleted_count, "errors": error_count}.
+    """
+    from .models import DataRetentionPolicy, ContractEvent
+    archived_count = 0
+    deleted_count = 0
+    error_count = 0
+
+    now = timezone.now()
+    policies = DataRetentionPolicy.objects.all()
+
+    for policy in policies:
+        try:
+            cutoff = now - timedelta(days=policy.retention_days)
+            qs = ContractEvent.objects.filter(timestamp__lt=cutoff)
+            if policy.contract:
+                qs = qs.filter(contract=policy.contract)
+
+            count = qs.count()
+            if count > 0:
+                if policy.archive_enabled:
+                    archived_count += count
+                count_deleted, _ = qs.delete()
+                deleted_count += count_deleted
+        except Exception:
+            error_count += 1
+
+    return {
+        "archived": archived_count,
+        "deleted": deleted_count,
+        "errors": error_count,
+    }
+
+
+@shared_task(name="ingest.tasks.cleanup_silk_data")
+def cleanup_silk_data(days_to_keep: int = 7) -> int:
+    """
+    Deletes silk profiling request logs older than `days_to_keep` days.
+    """
+    try:
+        from django.conf import settings
+        if "silk" not in getattr(settings, "INSTALLED_APPS", []):
+            return 0
+        from silk.models import Request as SilkRequest
+        from datetime import timedelta
+        cutoff = timezone.now() - timedelta(days=days_to_keep)
+        deleted_count, _ = SilkRequest.objects.filter(start_time__lt=cutoff).delete()
+        return deleted_count
+    except Exception:
+        return 0
+
+
+
+

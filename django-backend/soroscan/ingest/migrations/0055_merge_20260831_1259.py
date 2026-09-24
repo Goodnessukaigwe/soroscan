@@ -9,6 +9,7 @@ class Migration(migrations.Migration):
         ("ingest", "0054_contractevent_partitioning"),
         ("ingest", "0054_contractevent_payload_zstd"),
         ("ingest", "0054_organization_tier"),
+        ("ingest", "0054_contractevent_status"),
     ]
 
     operations = []

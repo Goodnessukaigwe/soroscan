@@ -200,7 +200,7 @@ const ContractHealthBadge = React.forwardRef<HTMLSpanElement, ContractHealthBadg
     style,
     ...props
   }, ref) => {
-    const config = HEALTH_STATUS_CONFIG[status];
+    const config = HEALTH_STATUS_CONFIG[status as keyof typeof HEALTH_STATUS_CONFIG] || HEALTH_STATUS_CONFIG.error;
     const displayLabel = label ?? config.label;
     const Icon = config.icon;
     

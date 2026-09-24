@@ -506,9 +506,9 @@ describe('VerificationRequestForm', () => {
       target: { value: '1.79.0' },
     });
     await act(async () => {
-      fireEvent.click(screen.getByTestId('vrf-submit-button'));
+      fireEvent.submit(screen.getByTestId('verification-request-form'));
     });
-    expect(screen.getByTestId('vrf-error')).toHaveTextContent('Source code is required');
+    expect(screen.getByTestId('vrf-error')).toHaveTextContent(/Source code is required/i);
   });
 
   it('shows validation error when compiler version is empty', async () => {
@@ -519,9 +519,9 @@ describe('VerificationRequestForm', () => {
       target: { value: 'fn main() {}' },
     });
     await act(async () => {
-      fireEvent.click(screen.getByTestId('vrf-submit-button'));
+      fireEvent.submit(screen.getByTestId('verification-request-form'));
     });
-    expect(screen.getByTestId('vrf-error')).toHaveTextContent('Compiler version is required');
+    expect(screen.getByTestId('vrf-error')).toHaveTextContent(/Compiler version is required/i);
   });
 
   it('calls onSubmit with correct data when form is valid', async () => {

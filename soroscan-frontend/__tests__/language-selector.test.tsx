@@ -13,9 +13,16 @@ jest.mock("next/navigation", () => ({
 }));
 
 describe("LanguageSelector", () => {
+  const originalLocation = window.location;
+
   beforeEach(() => {
-    pushMock.mockClear();
+    delete (window as any).location;
+    window.location = { href: "" } as any;
     mockPathname = "/";
+  });
+
+  afterEach(() => {
+    window.location = originalLocation;
   });
 
   it("renders a select with both supported locales", () => {
@@ -37,7 +44,7 @@ describe("LanguageSelector", () => {
     render(<LanguageSelector />);
     const select = screen.getByLabelText(/switch language/i);
     fireEvent.change(select, { target: { value: "es" } });
-    expect(pushMock).toHaveBeenCalledWith("/es/contracts");
+    expect(window.location.href).toBe("/es/contracts");
   });
 
   it("strips the locale prefix when switching back to the default locale", () => {
@@ -45,7 +52,7 @@ describe("LanguageSelector", () => {
     render(<LanguageSelector />);
     const select = screen.getByLabelText(/switch language/i);
     fireEvent.change(select, { target: { value: "en" } });
-    expect(pushMock).toHaveBeenCalledWith("/contracts");
+    expect(window.location.href).toBe("/contracts");
   });
 
   it("navigates to the bare /es root when on the default-locale homepage", () => {
@@ -53,6 +60,6 @@ describe("LanguageSelector", () => {
     render(<LanguageSelector />);
     const select = screen.getByLabelText(/switch language/i);
     fireEvent.change(select, { target: { value: "es" } });
-    expect(pushMock).toHaveBeenCalledWith("/es");
+    expect(window.location.href).toBe("/es");
   });
 });

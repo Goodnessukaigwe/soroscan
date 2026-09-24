@@ -130,7 +130,7 @@ describe("NavDrawer Component", () => {
     );
     expect(screen.getByText("Documentation")).toBeInTheDocument();
     expect(screen.getByText("Features")).toBeInTheDocument();
-    expect(screen.getByText("API_DOCS")).toBeInTheDocument();
+    expect(screen.getByText("API_Explorer")).toBeInTheDocument();
     expect(screen.getByText("GITHUB")).toBeInTheDocument();
     expect(screen.getByText("Login")).toBeInTheDocument();
   });

@@ -4,20 +4,18 @@ from contextlib import ExitStack
 
 from django.conf import settings
 from django.db import connections
+from django.utils.deprecation import MiddlewareMixin
 
 logger = logging.getLogger("django.performance.database")
 
 
-class SlowQueryLoggerMiddleware:
+class SlowQueryLoggerMiddleware(MiddlewareMixin):
     """
     Middleware that monitors and logs database queries exceeding a configurable execution time threshold.
     Uses django.db.connection.execute_wrapper for accurate timing and minimal overhead.
     """
 
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def __call__(self, request):
+    async def __call__(self, request):
         # Dynamically read threshold, defaulting to 1.0 seconds
         threshold = getattr(settings, "DATABASE_SLOW_QUERY_THRESHOLD", 1.0)
         
@@ -54,6 +52,6 @@ class SlowQueryLoggerMiddleware:
                 
                 stack.enter_context(connections[alias].execute_wrapper(make_wrapper(alias)))
             
-            response = self.get_response(request)
+            response = await self.get_response(request)
 
         return response

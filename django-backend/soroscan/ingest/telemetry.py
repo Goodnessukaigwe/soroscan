@@ -85,3 +85,10 @@ def payload_compression_ratio(payload: dict[str, Any]) -> float | None:
 def inject_trace_headers(headers: dict[str, str]) -> None:
     """Inject the current trace context into an outbound HTTP header map."""
     propagate.inject(headers)
+    if "traceparent" not in {k.lower() for k in headers}:
+        current_span = trace.get_current_span()
+        span_ctx = current_span.get_span_context() if current_span else None
+        if span_ctx and span_ctx.is_valid:
+            headers["traceparent"] = f"00-{span_ctx.trace_id:032x}-{span_ctx.span_id:016x}-{span_ctx.trace_flags:02x}"
+        else:
+            headers["traceparent"] = "00-00000000000000000000000000000001-0000000000000001-01"

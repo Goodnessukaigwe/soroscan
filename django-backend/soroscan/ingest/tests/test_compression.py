@@ -1,14 +1,17 @@
 import json
 import zstandard as zstd
+from django.contrib.auth.models import User
 from django.test import RequestFactory, TestCase
 from soroscan.ingest.models import TrackedContract, ContractEvent
 from soroscan.ingest.fields import CompressedJSONField
 
 class CompressedJSONFieldTest(TestCase):
     def setUp(self):
+        self.user = User.objects.create_user(username="compress_test_user")
         self.contract = TrackedContract.objects.create(
             contract_id="C" + "A" * 55,
             name="Test Contract",
+            owner=self.user,
         )
 
     def test_save_and_retrieve_compressed_payload(self):
@@ -36,13 +39,14 @@ class CompressedJSONFieldTest(TestCase):
             cursor.execute(
                 """
                 INSERT INTO ingest_contractevent 
-                (contract_id, event_type, payload, payload_hash, ledger, event_index, timestamp, tx_hash, validation_status, raw_xdr)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (contract_id, event_type, payload, payload_hash, ledger, event_index, timestamp, tx_hash, validation_status, raw_xdr, status, decoding_status, signature_status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                [self.contract.id, 'old_test', json.dumps(payload_data), 'hash', 101, 0, '2023-01-01 00:00:00+00', 'tx', 'passed', '']
+                [self.contract.id, 'old_test', json.dumps(payload_data).encode('utf-8'), 'hash', 101, 0, '2023-01-01 00:00:00+00', 'tx', 'passed', '', 'CONFIRMED', 'no_abi', 'missing']
             )
             
         event = ContractEvent.objects.get(event_type='old_test')
+        print(f"DEBUG_PAYLOAD: type={type(event.payload)}, val={event.payload!r}")
         self.assertEqual(event.payload, payload_data)
 
 

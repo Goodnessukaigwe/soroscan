@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from prometheus_client import Counter
+from django.utils.deprecation import MiddlewareMixin
 
 http_responses_total = Counter(
     "soroscan_http_responses_total",
@@ -11,14 +12,11 @@ http_responses_total = Counter(
 )
 
 
-class ErrorRateMetricsMiddleware:
+class ErrorRateMetricsMiddleware(MiddlewareMixin):
     """Count responses with service and bounded root-cause labels."""
 
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def __call__(self, request):
-        response = self.get_response(request)
+    async def __call__(self, request):
+        response = await self.get_response(request)
         status_code = response.status_code
         match = getattr(request, "resolver_match", None)
         view = (match.view_name if match else None) or "unresolved"
