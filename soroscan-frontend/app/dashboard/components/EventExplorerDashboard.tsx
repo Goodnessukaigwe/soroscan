@@ -15,7 +15,7 @@ import { useToast } from "@/context/ToastContext";
 import { parseSearchQuery, matchesFilters } from "@/lib/search-parser";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { useContractEventSubscription } from "@/src/hooks/useContractEventSubscription";
-import { SubscriptionStatusBadge } from "@/components/ui/SubscriptionStatusBadge";
+import { ConnectionStatusBadge } from "@/src/components/ConnectionStatusBadge";
 import { DashboardWorkspace } from "@/components/layout/DashboardWorkspace";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
 
@@ -431,6 +431,15 @@ export function EventExplorerDashboard() {
               </p>
             </div>
             <div className="flex items-center gap-3 self-start sm:self-auto">
+              <ConnectionStatusBadge
+                status={
+                  connectionState === "connected"
+                    ? "connected"
+                    : connectionState === "reconnecting"
+                      ? "reconnecting"
+                      : "offline"
+                }
+              />
               <NotificationBell />
             </div>
           </>
@@ -457,7 +466,6 @@ export function EventExplorerDashboard() {
           aria-label="Events table"
           actions={
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <SubscriptionStatusBadge connectionState={connectionState} />
               {newEventsCount > 0 && (
                 <button
                   type="button"

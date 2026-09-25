@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { ConnectionStatusBadge } from "@/src/components/ConnectionStatusBadge";
+import { useContractEventSubscription } from "@/src/hooks/useContractEventSubscription";
+
 import { ExportEventsModal } from "@/components/ingest/ExportEventsModal";
 import {
   fetchContract,
@@ -44,6 +47,13 @@ export function EventExplorerView({ contractId }: { contractId: string }) {
     isError: false,
   });
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const { connectionState } = useContractEventSubscription({ contractId, maxEvents: 1 });
+  const connectionStatus =
+    connectionState === "connected"
+      ? "connected"
+      : connectionState === "reconnecting"
+        ? "reconnecting"
+        : "offline";
 
   useEffect(() => {
     let active = true;
@@ -200,6 +210,7 @@ export function EventExplorerView({ contractId }: { contractId: string }) {
           <h1 className={styles.title}>{contractName}</h1>
           <p className={styles.contractId}>{contractId}</p>
           <div className={`${styles.row} ${styles.topActions}`}>
+            <ConnectionStatusBadge status={connectionStatus} />
             <Link
               href={`/contracts/${encodeURIComponent(contractId)}/timeline`}
               className={`${styles.btn} ${styles.secondaryBtn} ${styles.linkBtn}`}
