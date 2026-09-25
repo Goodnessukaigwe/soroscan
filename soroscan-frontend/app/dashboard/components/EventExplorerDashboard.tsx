@@ -15,6 +15,10 @@ import { useToast } from "@/context/ToastContext";
 import { parseSearchQuery, matchesFilters } from "@/lib/search-parser";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { useContractEventSubscription } from "@/src/hooks/useContractEventSubscription";
+import {
+  prependRecoveredEvents,
+  useEventGapCatchUp,
+} from "@/src/hooks/useEventGapCatchUp";
 import { SubscriptionStatusBadge } from "@/components/ui/SubscriptionStatusBadge";
 import { DashboardWorkspace } from "@/components/layout/DashboardWorkspace";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
@@ -247,6 +251,33 @@ export function EventExplorerDashboard() {
     contractId: filters.contractId || "",
     maxEvents: 10,
   });
+
+  const { recoveredEvents, recordReceivedEvent } = useEventGapCatchUp(
+    filters.contractId || "",
+    connectionState === "connected",
+  );
+
+  useEffect(() => {
+    for (const event of realTimeEvents) {
+      recordReceivedEvent({ id: event.id, ledger: event.ledgerSequence });
+    }
+  }, [realTimeEvents, recordReceivedEvent]);
+
+  useEffect(() => {
+    if (currentPage !== 1) {
+      return;
+    }
+    for (const event of events) {
+      recordReceivedEvent({ id: event.id, ledger: event.ledger });
+    }
+  }, [currentPage, events, recordReceivedEvent]);
+
+  useEffect(() => {
+    if (!recoveredEvents.length) {
+      return;
+    }
+    setEvents((prev) => prependRecoveredEvents(prev, recoveredEvents));
+  }, [recoveredEvents]);
 
   // Track new events
   useEffect(() => {

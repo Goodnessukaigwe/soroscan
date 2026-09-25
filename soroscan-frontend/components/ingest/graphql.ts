@@ -128,6 +128,8 @@ export const EXPLORER_EVENTS_QUERY = `
     $offset: Int!
     $since: DateTime
     $until: DateTime
+    $fromLedger: Int
+    $toLedger: Int
   ) {
     events(
       contractId: $contractId
@@ -136,6 +138,8 @@ export const EXPLORER_EVENTS_QUERY = `
       offset: $offset
       since: $since
       until: $until
+      fromLedger: $fromLedger
+      toLedger: $toLedger
     ) {
       id
       eventType
@@ -301,6 +305,8 @@ interface EventsVariables {
   offset: number;
   since: string | null;
   until: string | null;
+  fromLedger?: number | null;
+  toLedger?: number | null;
 }
 
 interface AllEventsVariables {
@@ -329,18 +335,64 @@ export async function fetchExplorerEvents(variables: EventsVariables): Promise<E
     return data.allEvents ?? [];
   }
 
-  const data = await graphqlRequest<EventsQueryResult, { contractId: string; eventType: string | null; limit: number; offset: number; since: string | null; until: string | null }>(
-    EXPLORER_EVENTS_QUERY,
+  const data = await graphqlRequest<
+    EventsQueryResult,
     {
-      contractId: variables.contractId,
-      eventType: variables.eventType,
-      limit: variables.limit,
-      offset: variables.offset,
-      since: variables.since,
-      until: variables.until,
-    },
-  );
+      contractId: string;
+      eventType: string | null;
+      limit: number;
+      offset: number;
+      since: string | null;
+      until: string | null;
+      fromLedger: number | null;
+      toLedger: number | null;
+    }
+  >(EXPLORER_EVENTS_QUERY, {
+    contractId: variables.contractId,
+    eventType: variables.eventType,
+    limit: variables.limit,
+    offset: variables.offset,
+    since: variables.since,
+    until: variables.until,
+    fromLedger: variables.fromLedger ?? null,
+    toLedger: variables.toLedger ?? null,
+  });
   return data.events ?? [];
+}
+
+export async function fetchCurrentLedger(contractId: string): Promise<number | null> {
+  const latest = await fetchExplorerEvents({
+    contractId,
+    eventType: null,
+    limit: 1,
+    offset: 0,
+    since: null,
+    until: null,
+  });
+  if (!latest.length) {
+    return null;
+  }
+  return Math.max(...latest.map((event) => event.ledger));
+}
+
+export async function fetchEventsInLedgerRange(
+  contractId: string,
+  fromLedger: number,
+  toLedger: number,
+): Promise<EventRecord[]> {
+  if (fromLedger > toLedger) {
+    return [];
+  }
+  return fetchExplorerEvents({
+    contractId,
+    eventType: null,
+    limit: 1000,
+    offset: 0,
+    since: null,
+    until: null,
+    fromLedger,
+    toLedger,
+  });
 }
 
 export async function fetchEventsForExport(variables: EventsVariables): Promise<EventRecord[]> {
