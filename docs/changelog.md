@@ -6,12 +6,39 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- Use npm install instead of npm ci for TypeScript SDK in workspace setup ([4225ec6](4225ec69b3070d61ea254d128d65f7751465cef5))
+- Remove bad merge artifact from tasks.py, pin Rust to 1.85 for edition2024 support ([2a37a28](2a37a28daf5b5d057bd3e9acb94a3d9c4c5e41c0))
+- Resolve ASGI middleware coroutine error and pnpm docker build ([c27dd70](c27dd70b5df88e1bc77ab119de9ca27df7ca106a))
+- Repair Django app-loading crash, migration conflict, and event Serialization (#1399) ([0a82422](0a824222b6f5c203dab04755268c7a22984af40a))
+- Use --no-deps for cargo clippy in soroban.yml ([2a92297](2a92297303779a4758644eea60fb673167dac38f))
+- Update workflow working directories and enforce cargo --locked ([bd78d86](bd78d8680aa96ac8ecd70299dbce57a89c31f389))
+- Trigger GitHub Actions workflows on dev and main branches & sync PR merges ([ca53ffc](ca53ffcaa1a2c8cf66ed5e585f3ba496dfebf21d))
+- Resolve backend and soroban contract test failures ([68ec5ff](68ec5ff45e8e85e322068fc4acfe0e9c767cc54d))
+- Correct filter_condition validation and numeric comparisons (#834) (#863) ([96759c5](96759c5215e28e99db2393f75423e0df35ed78ba))
+- Exempt health check endpoints from DRF rate limiting to prevent load test failure ([baef969](baef969bc2b3942836113e6b9ba81a3114fcc5ca))
+- Fix postgres configuration in load tests and restore github.token for changelog prs ([a3643be](a3643be742dcf9432621b77971f04d2b02e410fd))
+- Add resources and securityContext to (#817) ([03eabbc](03eabbcdaed9d10983ccdba5c0876765a4d3c8c4))
 - Return 429 Too Many Requests for rate limits (#348) ([84b2e7b](84b2e7b654808426eae37d893d98c121361de0a7))
 - Add mobile responsiveness for all pages #61 (#69) ([c03500d](c03500d7b57fbf7193abcda552b26e30e751fff0))
 - Resolve ruff linting errors (F841 unused variables) ([33ccd58](33ccd58928e1c45c6ed873610675a169d62e1954))
 
 ### Documentation
 
+- Document GraphQL query complexity scoring and limits (#1390) ([adba05e](adba05e421bb59d3fe404fecb4ee837f38a09901))
+- Write guide on historical event backfilling from Horizon archives (#1393) ([856c904](856c904b75716813f161c608bb1dae6b0ba37228))
+- Fix webhook signature docs to match the actual X-Signature format (#1389) ([130a5f0](130a5f098bdb145563958c1ff43ba153e7e03ed9))
+- Document GraphQL schema evolution and backwards compatibility (#1385) ([a2917a2](a2917a2082aad2c893fa7938f72db7a014e6f85e))
+- Add contributor, Apollo, webhook, and ADR guides (#1379) ([034772c](034772cada52f5c6d053e9652326826eb166d420))
+- Add TypeScript SDK quickstart guide and promise usage examples (#974) (#1372) ([a98a069](a98a069429a5462427974b5a06068c8918c485b9))
+- Add CSS utility class guidelines to typography spec (#972) (#1371) ([95616a2](95616a24cad337a9db15311b38272b0488bf4506))
+- Comprehensive community contributing guidelines (#1005) (#1359) ([fc48b7c](fc48b7c36294445e0e2c2e73cadc5c0c7906ef50))
+- Contract pause and suspension workflows guide (#1003) (#1355) ([3dc252f](3dc252f32f2e7ce25ebf0f1989eef026773f065c))
+- Add fastapi sdk integration tutorial requirements spec (#1351) ([032171f](032171f0bbbab7596fd4c554dc7fb68f988ce0b2))
+- Resolve issues #993, #994, #996, and #997 (#1342) ([49728be](49728beeadb18fd0cc342b236c448722552a2ac7))
+- Add DATA_RETENTION.md — data retention and event archival policy (#1002) (#1344) ([cb6312c](cb6312caa31655026c589757d8023859ff3da4e8))
+- Add CLI reference guide for management commands (#1345) ([226b3bc](226b3bc2def8b4b2cdf7712bc8261ef7a5072d84))
+- Create cookbook of real-world integration examples and use case tutorials (#822) ([7b709a5](7b709a5897bbb1c3485f38a6aedba4435fd517a1))
+- Add SDK, security, contract integration, and rate limit guides (#814) ([4180cd4](4180cd4fbeb00b6c0e9b4375b39da3c472ea018c))
 - Add IaC, release notes, and SDK development guides (#742) ([3bd77fe](3bd77fe84a74a799b23f2d1aed11af0c075d43bf))
 - Add database admin, contributing, troubleshooting, and roadmap guides (#740) ([ef6b6af](ef6b6afa133fac76b09f3009b50e600360a2b08b))
 - Add error states and validation patterns checklist (#684) ([b2f406b](b2f406ba10659d73248042fb370d95637744ea22))
@@ -24,6 +51,10 @@ All notable changes to this project will be documented in this file.
 
 ### Feat
 
+- Implemented soroban contract & sdk feature sc 23 (#1207) ([d5bdbe2](d5bdbe265c070e7e91abea5b17db1dc5ccacf98c))
+- Add api deprecation headers (#828) ([1a50f21](1a50f216872a56b3c2b57c383b3d5003b27b85a8))
+- Field-Level Authorization (GraphQL) (#806) ([6fe994a](6fe994a664bf319029cf5cf25f13c532ebb8753f))
+- Webhook Simulator for Testing (#747) ([6fa3e1a](6fa3e1a7ed78e593ac8bbc771620774da1efa076))
 - Add responsive mobile card grid for events (#713) ([81f54e4](81f54e4c97e1b19d66471045b091cd4a1e5fa71d))
 - Mobile navigation drawer (#700) ([9bd9cfb](9bd9cfba5b1e15bb6dbd563d54711d18ddf9b493))
 - Implemented event batch operations (#699) ([c1b6833](c1b68338fdb3e078b05cdd12fd1d499b7049a1ef))
@@ -36,6 +67,80 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Resolve incidents, webhook replay, dedup UI, and contract bulk import (#1330, #1329, #1328, #1327) (#1357) ([41e7297](41e7297dbec2119a2ca7eb851e2ea6ded51af5d7))
+- Add readiness metrics and traceparent propagation (#1398) ([9fc2841](9fc2841bea4ffef80051c42df08c319a7537d3ed))
+- Resolve #1278, #1279, #1280 (partitioning, bulk replay, SDK codegen) (#1397) ([2339266](233926641cb27b0383dde0cf3cdf4fc39f8c39c9))
+- Add async Python client and tier rate limiting (#1396) ([228ffcb](228ffcbd87597a42d0b53a767612d867b244de1a))
+- Add XDR decoding and SDK retry backoff (#1395) ([4d23a31](4d23a3166825cfa88c8b8d3a6345b963254030ad))
+- Add GraphQL N+1 query detection and Celery task queue monitoring (#1290, #1292) (#1392) ([16a02de](16a02de12c413bfe5fba41ff5f4a82372663a74e))
+- Implement field-level authorization in GraphQL resolvers (#1386) ([3909c67](3909c67d4bd0403b0e234660b2676f96bb1818a9))
+- Combined SDK docs, toast specs, db explain, builder (#1299 #975 #1291 #1281) (#1391) ([abda78e](abda78e4bb37503c2d820aba741cb558539e7f7c))
+- Implement rest api endpoint to list supported event schema versions (#1377) ([9adb131](9adb131ceabdee68d6fe19a69c886aa7abe01f1f))
+- Resolve #1057, #1059, #998, #1001 - ui components and design specs (#1362) ([b988712](b9887126046c54ab25552a5aef53ceeab8e4a78a))
+- Reliability improvements — circuit breaker, shutdown, DLQ, schema validation (#1361) ([1385834](1385834b73cc380a2749c7fde88999b63295b9c7))
+- Add shimmer skeleton placeholders for event explorer layouts (#1337) ([a9b78ee](a9b78ee12c2cb10fcf539572dddae37d33fb2dac))
+- Replace manual contract-list caching with @cache_page (#1336) ([1d0e3bb](1d0e3bb2c4806d1ffa8b0c8b1590b7ca9999724c))
+- Implement configurable database query timeout (#1335) ([cedf381](cedf3812261f2ebcf5ce8c1f1cb4d19fcbaaa912))
+- Restore Event Explorer route, share toast system, complete Grafana templates (#1343) ([ae203fb](ae203fb2e6948fa312af68fc672acbf4dfb6e42e))
+- Implement responsive tabs, stat card, and toast notifications, and React SDK tutorial (#1348) ([b5fb8fd](b5fb8fda1f051681cf642aefb73173aaba7784ad))
+- Add admin CLI commands for orgs, API keys, and invoices (#1341) ([e4ac0b1](e4ac0b1f1bbee1c95591857e18e26f4aec9f25c3))
+- Add local event replay utility for webhook debugging (#1340) ([dbcf8e4](dbcf8e41e5b9c9ca4f312e00e822a0c3fb123448))
+- Add standalone webhook simulator for local testing (#1339) ([2e91afe](2e91afe60c5c0fcb2bcbf521cfe3093bd78c552b))
+- Add standalone CLI for querying events, webhooks, and contracts (#1338) ([7383fb1](7383fb19fa4b5e99d87dbbb5fc3417cec71e0b99))
+- Wire up notification center and live event monitor (#944) ([867e2ca](867e2caa9056a3cae7810bcde32d703b1cae917f))
+- Per-indexer event recording statistics (SC-13) (#1185) ([e255c82](e255c82e7eacf4194130cb39a97443252b97cf8d))
+- Contract pause/unpause circuit breaker (SC-28) (#1186) ([d04b4ee](d04b4ee0105996901303bbcf8aba35d07927f444))
+- Add per-contract latest event, contract events and health to SDKs (SC-16) (#1208) ([2a48ab6](2a48ab64bfde818a5ca71300465bd87e09208679))
+- Fix i18n foundation and prove it end-to-end on the landing page (#840) (#864) ([5238d3d](5238d3d134d6fb9efbf6c956de54b0f5cef29480))
+- Implement SC-9 add_indexer across contract, API, and SDKs (#1178) ([0acf03d](0acf03d7e9bf1ce74d98d2f9d09a58adad0d1aaa))
+- Soroban contract and SDK feature SC-30 (per-contract recent events) (#1202) ([8a65091](8a650912a9128a262bb5688c5035cf61feaa2213))
+- Add Stepper UI component (#1102) (#1200) ([0b9ff85](0b9ff85ae673ef6fff59de3bfdc23b193eee5c12))
+- Add Popover UI component (#1101) (#1199) ([e970fa6](e970fa644046eab665dfc9d26ca528bde1ace168))
+- Add RadioGroup UI component (#1099) (#1198) ([93cce9c](93cce9c2c64fc877bd24db9fbbe99366731464f8))
+- Add Accordion UI component (#1098) (#1197) ([724ab96](724ab96d021ccf921ddd7e9343c65db3cb219b56))
+- Add tests for record event JSON output in CLI and TypeScript (#1191) ([29ae6a9](29ae6a9adb0159479142ecfb2d5f541b9f3c7771))
+- CDC monitoring dashboard for data warehouse syncs (#917) (#1165) ([440086b](440086ba9e369a432c33d79b7291453498ff63db))
+- Event correlation & atomic transaction visualization (#916) (#1158) ([a217644](a217644dd6f2c18dd531af819a34e2e27f64478d))
+- Implement Soroban contract and sdk feature sc-10 (#1190) ([707cd30](707cd301195476a4415ae70492d1da6a1ca5b738))
+- Add SC-38 structured event support (#1188) ([19be985](19be985a4e0e32758742fcdf522bbb4a29831b93))
+- Add Pydantic schema validation, Rust macros, WebSocket client, and responsive frontend component (#1176) ([4764ee4](4764ee4c875abf5c863811da73a4d754d946d417))
+- Add per-contract event tracking and event type query (SC-17) (#1169) ([06b8084](06b8084d6adbe7b65b881134c40869dd136d3d8f))
+- Build interactive contract dependency graph with vulnerability impact analysis (#922) (#1164) ([496180a](496180a51fdc3762b88eb7a296fcc2fff316dc38))
+- Add loaders badges timeline and event links (#1189) ([9f07c98](9f07c982af15d29860f87de3f0e974a5f29eab85))
+- Add Avatar, Breadcrumb, Toggle, and Progress UI components (#1168) ([d13b742](d13b74279750e6e3786d7fe594e7adfefd9f8b16))
+- Build developer portal with interactive API explorer, SDK docs, and code samples (#923) (#1167) ([fc52d03](fc52d03c0e4d59e5c76ff9e94bcfd4ab402359f5))
+- Data quality dashboard with completeness metrics and reconciliation UI (#918) (#1166) ([fe7fd22](fe7fd2240c13de5d3c6068970f4b594c8f8b719c))
+- Implemented Soroban Contract and sdk feature  (#1163) ([2d0189f](2d0189f6eeb0271342a2043814b570011a2b37bf))
+- Contract source code viewer with verification badges and ABI explorer (#914) (#1156) ([997bcc2](997bcc2767224d96b47a6df3199615888cca5add))
+- Implement GDPR compliance dashboard and contract dependency graph (#947) ([ec23a35](ec23a350fe7cde8381a12eadb53217881ff3ea13))
+- Add responsive table component with mobile card layout (#942) ([30f7e22](30f7e22e9e937626b0fd64d5e5cc7ee2073949b5))
+- Implement dark and light theme toggle with system preference detection (#1162) ([cac27d5](cac27d50c9d28e2c769e7747c673c5aeac79a4dc))
+- Implement event decoding tests and update docs (closes #1110, #957, #958, #962) (#1157) ([d53fbdd](d53fbddd8fc3dfe48888b4dee858c2345e3ac054))
+- Add reusable decorator to validate webhook HMAC signatures (#938) ([7f464b2](7f464b209999bb86db15aea97ba15066b2e2c5ec))
+- Audit and improve accessibility to meet WCAG 2.1 AA standards (#1161) ([92bd30e](92bd30e25f42827dfde24ba5009dd98632e86b66))
+- Build dedicated live event streaming page with auto-scroll and pause (#1160) ([0c038cc](0c038cc8baecea79f4585f21863e7ef115e22e6a))
+- Build performance dashboard showing API latency, cache hits, and system health (#1159) ([6f8a7fc](6f8a7fc929b8ef0e6dcba4f9e1105f708bc5c53b))
+- Webhook console, api explorer, advanced search, and a11y smoke checks (#951) ([37a541b](37a541b0aaebd00e10ecd6fa67070874ce7d6e63))
+- Add pagination component requirements spec (#953) ([7ce1a3f](7ce1a3f141a705dd3d79a0aa932d680b2d5f3e27))
+- Add reusable Card component with variants (#948) ([a46dd6a](a46dd6a0278ab8e8a618f5068b5d07b49b0fdd91))
+- Activate task timeout monitoring with 80% warning threshold (#939) ([35c09a7](35c09a7607a9e4e94956e54dafc6afda7a58b24e))
+- Add core UI components (skeleton, tabs, empty states) and Celery task prioritization (#932) ([b69ed85](b69ed853cd4bdd7034d911cf3d9edef51f0ebe18))
+- Implement Redis Cache Warmer, Webhook DLQ, Structured Logging & Integration Test Suite (#778, #765, #763, #760) (#931) ([70acf23](70acf236c684ce3ee2c1ca65c5b17aabb3088701))
+- Init frontend monorepo, implement dark mode, add ingestion metrics, and configure dynamic CORS (#929) ([25f5489](25f5489784ec2d219d8ea2fe1c1d8a07b0817f3b))
+- Add UI feedback components and environment docs (#930) ([2d16757](2d16757dccca05caaf525de03b50242b05836fac))
+- Implement contract pause/suspension for maintenance and incident response (#833) (#865) ([8fcd4a7](8fcd4a7a35706de5e91072e8223e204430764adc))
+- Event reprocessing, rate-limit analytics, body size limits, and admin audit (#861) ([c054b32](c054b32573591a2ea36eadca1d045a8d2d1754e6))
+- Event reprocessing, rate-limit analytics, body size limits, and admin audit (#858) ([d789096](d789096b879dc63c6738ce2d9effb3c73ab7d528))
+- Implement Create Loading Spinner Component (#859) ([688008e](688008e1f29438d9d1f3c7d33ab5d52060846321))
+- Log celery retries, validate env vars, add Alert and Pagination components (#856) ([f0b8d49](f0b8d4906d0db01ce332cb1c1b2ec0d12680ff58))
+- Build accessible dropdown select component (#790) (#849) ([a9578ac](a9578ac91117e3baea74f1c30880180376adca76))
+- Build User Settings page for theme, notifications, and API keys (#826) ([2eff8eb](2eff8eb5a245bd555199fa9c699fac8c74533a9b))
+- GraphQL Code Generator with Apollo hooks (#769) (#815) ([6dd6e2e](6dd6e2e8d52d3b50eab2b13580886a0823e0d7ce))
+- Add mobile-responsive-ui-optimization spec (#818) ([335eb77](335eb771ce6b8fbb9b825c206e4b6429b88e5689))
+- Optimize pools alerts and queue monitoring (#752) ([747f225](747f225869b97868bf612290af5e254531357b14))
+- Implement contract event export CLI, chaos testing suite, and automated changelogs (#750) ([17fa72c](17fa72c9ef3b77ee8d980f249f5da6f57d51f931))
+- Implement dual-language sdk test matrices, jaeger telemetry tracing, prometheus pXX tracking, and graphql governance docs (#751) ([4e5e0db](4e5e0dbfc533c2ac4284532898609fca7e39c0ee))
+- API performance improvements - gzip compression, N+1 detection, query caching, DB explain endpoint (#749) ([3bacec5](3bacec5a5c098398ae9c1e9dc412d34c7625ea43))
 - Payload compression, tracing, and DLQ observability (#743) ([3e050ca](3e050ca965ad4949dd1197ddec66f35cc15729de))
 - Resolve webhook headers, health checks, event filters, and dupl… (#734) ([e8ae880](e8ae880d1536978d63d4cee3ae71cc353854a499))
 - Add KeyboardShortcutsOverlay component and integrate into Providers (#732) ([55f03ef](55f03efd50381ca94eef82038ecfe216a4ac5c92))
@@ -145,6 +250,7 @@ All notable changes to this project will be documented in this file.
 
 ### Miscellaneous Tasks
 
+- Update changelog (#744) ([2b59977](2b59977bd9d61d2751d6fe9d1fb561a89c3b1510))
 - Clean tracked environment artifacts ([63e7b58](63e7b58b8648e937cfaa0a1e9509f7f5098a290a))
 - Configure pre-commit hooks for black, flake8, and isort (Closes #374) (#442) ([a4722da](a4722da830252ce28e8d081330aba3e5e2abd1a6))
 - Remove venv from tracking and add to .gitignore ([f9cfe5f](f9cfe5f16ebc8986cec7fe4c7e3b218a80f544fe))
@@ -154,8 +260,25 @@ All notable changes to this project will be documented in this file.
 - Web sockets (#93) ([976da0a](976da0a51643b49dc2094e87ea219d34b0753563))
 - Add .gitignore for Rust build artifacts and test snapshots ([def4859](def4859460ca941f8684de4701253d91244c6636))
 
+### Observability
+
+- Request latency percentiles, OTel spans, error-rate alerts, structured logging docs (#1384) ([d9fbae0](d9fbae079f668c5b66af3c3d4d4aebc1204c1bc3))
+
+### Performance
+
+- Optimise Next.js bundle and add Core Web Vitals tooling (#841) (#866) ([88cd631](88cd63112ab401c80043017cf179189d15872e60))
+
+### Refactoring
+
+- Clean repo structure, update admin security, fix favicon and seed recursion ([940c465](940c46583acdedac9839950f79bb2911c7b67e5f))
+
 ### Testing
 
+- Unified failover, migration, load, and chaos suites (#1314-#1317) (#1360) ([b089e68](b089e689bc54a272899a15b86f65b865419418f8))
+- Add dedicated tests for slow query logging middleware (#941) ([afec16e](afec16ea948e4ac3fea3b63ba90ae3d84afc3bf0))
+- Add tests for request ID logging and db pool stats (#946) ([9e03e20](9e03e2067d86df06848cd87638bd79d608178517))
+- Verify compressed response is smaller than uncompressed (#940) ([02f16e5](02f16e50d95810b08477d832a2dcb32752512277))
+- Align soroscan_core unit tests with issue #754 spec (#821) ([708ebc7](708ebc7e6afe70b27ffbcd2e1e30047270566a5e))
 - Add comprehensive tests for webhook signature validation (#627) ([4bf9d6c](4bf9d6c2275347d618d37e11e40e0fd2b55c406e))
 - Strengthen toast notification coverage for all types (#640) ([347e41a](347e41a010eadd0f0603a92326573d3bd30580c9))
 - Add unit test for daily platform stats window logic (#432) ([9861b45](9861b45e5deef2025af5ff8d981e03ba95ba25f4))
@@ -167,5 +290,19 @@ All notable changes to this project will be documented in this file.
 - Use pat for changelog pull request ([83ab8b2](83ab8b2c3df73f6262f50e28ee26d6556ef4be56))
 - Allow changelog workflow to open prs ([de776f9](de776f91f8027c5928238f6a724b8546ea59a669))
 - Update git-cliff action ([4bab0c8](4bab0c8493f4a8cfcbef999934acd751d9a30dfc))
+
+### Design
+
+- Empty state copy, CTAs, and illustration spec (#969) (#1370) ([6b43713](6b437131e2e1e65c18cb7793830fe822d22d1a08))
+- Modal dialog wireframes, interaction spec, and focus-trap fix (#977) (#1369) ([92ffcdf](92ffcdf30a7fe46812dad876b513138781ce0718))
+- Contract state snapshot timeline visualization mockup (#1376) ([c718d0a](c718d0a8f3fb945e3e8f41c3cb89f313411155b2))
+- Terminal UI micro-animation guidelines and hover states (#1375) ([e3c34d0](e3c34d0d15ad1e5e24e0fe0ffb79325ba8e002d0))
+- Breadcrumb and pagination control wireframes (#1374) ([202814f](202814fc125455f25411ba111602a5b199137a73))
+- Add mobile filter bar and search control wireframes (#1373) ([22ed04e](22ed04e3989f175eb1a907ae7029a36bd014a26f))
+- Status badge and tag component specifications (#1004) (#1356) ([d2f9e6b](d2f9e6bcf38e7b9fb76f96082f8a9dc426dc155c))
+
+### Merge
+
+- Integrate main into dev and resolve merge conflicts ([1130b8a](1130b8ae1176b091a5b957a710292b05540e54ad))
 
 <!-- generated by git-cliff -->
