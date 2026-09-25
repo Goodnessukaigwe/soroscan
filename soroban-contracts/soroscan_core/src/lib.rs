@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
+    Map, Symbol, Vec,
 };
 
 // Storage keys
@@ -13,6 +13,8 @@ const PAUSED_KEY: Symbol = symbol_short!("paused");
 const CONTRACT_STATS_KEY: Symbol = symbol_short!("cstats");
 const CONTRACT_EVENT_TYPES_KEY: Symbol = symbol_short!("etypes");
 const CONTRACT_RECENT_EVENTS_KEY: Symbol = symbol_short!("revents");
+/// Last WASM hash applied via `upgrade` (native test contracts start as empty WASM).
+const WASM_HASH_KEY: Symbol = symbol_short!("wasmhash");
 
 /// Maximum number of recent events retained per contract (SC-30).
 /// Older entries are evicted (FIFO) once this bound is reached.
@@ -23,6 +25,14 @@ const MAX_RECENT_EVENTS_QUERY_LIMIT: u32 = MAX_RECENT_EVENTS_PER_CONTRACT;
 
 /// Maximum number of producer-defined tags per SC-24 event.
 const MAX_TAGS: u32 = 4;
+
+/// Emitted when this contract's WASM executable is replaced.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractUpgradedEvent {
+    pub old_wasm_hash: BytesN<32>,
+    pub new_wasm_hash: BytesN<32>,
+}
 
 /// SC-24 tagged event record.  Tags are short producer-defined strings that
 /// allow off-chain indexers to filter events without decoding the full payload.
@@ -165,6 +175,18 @@ fn push_recent_event(env: &Env, contract_id: Address, record: EventRecord) {
     env.storage()
         .instance()
         .set(&CONTRACT_RECENT_EVENTS_KEY, &all);
+}
+
+/// WASM hash currently associated with this instance.
+///
+/// After `upgrade` this is the hash persisted under `WASM_HASH_KEY`. Native
+/// `register_contract` tests use the host's empty-WASM executable, whose hash
+/// is SHA-256 of an empty byte string.
+fn current_wasm_hash(env: &Env) -> BytesN<32> {
+    env.storage()
+        .instance()
+        .get(&WASM_HASH_KEY)
+        .unwrap_or_else(|| env.crypto().sha256(&Bytes::new(env)).to_bytes())
 }
 
 #[contract]
@@ -997,13 +1019,46 @@ impl SoroScanCore {
             .instance()
             .get(&DataKey::LatestTaggedByType(event_type))
     }
+
+    /// Replace the current contract WASM and emit `ContractUpgraded`.
+    ///
+    /// Captures the previously installed WASM hash before
+    /// `update_current_contract_wasm`. Topic is `("soroscan", "contract_upgraded")`.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), ContractError> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .ok_or(ContractError::NotInitialized)?;
+        admin.require_auth();
+
+        let old_wasm_hash = current_wasm_hash(&env);
+
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+
+        env.storage().instance().set(&WASM_HASH_KEY, &new_wasm_hash);
+
+        env.events().publish(
+            (
+                symbol_short!("soroscan"),
+                Symbol::new(&env, "contract_upgraded"),
+            ),
+            ContractUpgradedEvent {
+                old_wasm_hash,
+                new_wasm_hash,
+            },
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Events};
-    use soroban_sdk::Env;
+    use soroban_sdk::{Env, TryFromVal, Val};
 
     fn setup_contract(env: &Env) -> (SoroScanCoreClient<'_>, Address, Address) {
         let contract_id = env.register_contract(None, SoroScanCore);
@@ -2026,5 +2081,115 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events.get(0).unwrap().event_type, symbol_short!("mint"));
         assert_eq!(events.get(1).unwrap().event_type, symbol_short!("swap"));
+    }
+
+    /// Minimal Soroban WASM (magic + contract metadata sections) used as a valid upload.
+    const CONTRACT_WASM_V1: &[u8] = include_bytes!("../testdata/minimal_v1.wasm");
+
+    fn wasm_v2(env: &Env) -> Bytes {
+        let mut wasm = Bytes::from_slice(env, CONTRACT_WASM_V1);
+        wasm.append(&Bytes::from_array(
+            env,
+            &[0x00, 0x05, 0x01, b'x', 0x00, 0x00, 0x00],
+        ));
+        wasm
+    }
+
+    fn find_contract_upgraded(
+        env: &Env,
+        events: &soroban_sdk::Vec<(Address, soroban_sdk::Vec<Val>, Val)>,
+    ) -> (Address, ContractUpgradedEvent, soroban_sdk::Vec<Val>) {
+        let expected_t0 = symbol_short!("soroscan");
+        let expected_t1 = Symbol::new(env, "contract_upgraded");
+
+        let found = events
+            .iter()
+            .find(|e| {
+                if e.1.len() != 2 {
+                    return false;
+                }
+                let t0 = Symbol::try_from_val(env, &e.1.get(0).unwrap());
+                let t1 = Symbol::try_from_val(env, &e.1.get(1).unwrap());
+                t0 == Ok(expected_t0.clone()) && t1 == Ok(expected_t1.clone())
+            })
+            .expect("ContractUpgraded event should be present");
+
+        let payload = ContractUpgradedEvent::try_from_val(env, &found.2)
+            .expect("event payload should decode as ContractUpgradedEvent");
+        (found.0.clone(), payload, found.1.clone())
+    }
+
+    #[test]
+    fn test_upgrade_emits_contract_upgraded_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _admin, _indexer) = setup_contract(&env);
+        let contract_id = client.address.clone();
+
+        // Native test contracts are installed with the host's empty WASM blob.
+        let old_wasm_hash = env.crypto().sha256(&Bytes::new(&env)).to_bytes();
+        let new_wasm_hash = env
+            .deployer()
+            .upload_contract_wasm(Bytes::from_slice(&env, CONTRACT_WASM_V1));
+
+        client.upgrade(&new_wasm_hash);
+
+        let all_events = env.events().all();
+        let (emitter, payload, topics) = find_contract_upgraded(&env, &all_events);
+
+        assert_eq!(emitter, contract_id);
+        assert_eq!(topics.len(), 2);
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(),
+            symbol_short!("soroscan")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
+            Symbol::new(&env, "contract_upgraded")
+        );
+        assert_eq!(payload.old_wasm_hash, old_wasm_hash);
+        assert_eq!(payload.new_wasm_hash, new_wasm_hash);
+    }
+
+    #[test]
+    fn test_upgrade_event_tracks_previous_and_replacement_hashes() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _admin, _indexer) = setup_contract(&env);
+        let contract_id = client.address.clone();
+
+        let previous_wasm_hash = env
+            .deployer()
+            .upload_contract_wasm(Bytes::from_slice(&env, CONTRACT_WASM_V1));
+        let replacement_wasm_hash = env.deployer().upload_contract_wasm(wasm_v2(&env));
+
+        // Record the previously installed hash without replacing the native test
+        // executable (a real WASM upgrade would drop native `upgrade` exports).
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .set(&WASM_HASH_KEY, &previous_wasm_hash);
+        });
+
+        client.upgrade(&replacement_wasm_hash);
+
+        let all_events = env.events().all();
+        let (emitter, payload, topics) = find_contract_upgraded(&env, &all_events);
+
+        assert_eq!(emitter, contract_id);
+        assert_eq!(topics.len(), 2);
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(),
+            symbol_short!("soroscan")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
+            Symbol::new(&env, "contract_upgraded")
+        );
+        assert_eq!(payload.old_wasm_hash, previous_wasm_hash);
+        assert_eq!(payload.new_wasm_hash, replacement_wasm_hash);
+        assert_ne!(payload.old_wasm_hash, payload.new_wasm_hash);
     }
 }
