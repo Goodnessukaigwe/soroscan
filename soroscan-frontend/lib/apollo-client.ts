@@ -13,6 +13,13 @@ import { onError } from '@apollo/client/link/error';
 import { RetryLink } from '@apollo/client/link/retry';
 import { getMainDefinition } from '@apollo/client/utilities';
 import { getAccessToken, clearTokens, refreshAccessToken } from './auth';
+import {
+  GRAPHQL_WS_RETRY_ATTEMPTS,
+  graphqlWsRetryDelayMs,
+  recordGraphqlWsRetryAttempt,
+  resetGraphqlWsReconnectionAttempts,
+  shouldRetryGraphqlWs,
+} from './graphql-ws-backoff';
 
 // HTTP Link – connects to the GraphQL endpoint
 const httpLink = new HttpLink({
@@ -118,13 +125,19 @@ function buildLink(): ApolloLink {
     const wsLink = new GraphQLWsLink(
       createClient({
         url: wsUrl,
-        // Exponential back-off: 1 s, 2 s, 4 s … capped at 30 s
-        retryAttempts: Infinity,
-        retryWait: (retries) =>
-          new Promise((resolve) =>
-            setTimeout(resolve, Math.min(2 ** retries * 1000, 30_000))
-          ),
-        shouldRetry: () => true,
+        retryAttempts: GRAPHQL_WS_RETRY_ATTEMPTS,
+        shouldRetry: shouldRetryGraphqlWs,
+        retryWait: (retries) => {
+          recordGraphqlWsRetryAttempt(retries);
+          return new Promise((resolve) =>
+            setTimeout(resolve, graphqlWsRetryDelayMs(retries)),
+          );
+        },
+        on: {
+          connected: () => {
+            resetGraphqlWsReconnectionAttempts();
+          },
+        },
       })
     );
 

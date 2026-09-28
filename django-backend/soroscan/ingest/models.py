@@ -812,6 +812,14 @@ class ContractEvent(models.Model):
             models.Index(fields=["ledger"]),
             models.Index(fields=["tx_hash"]),
             models.Index(fields=["contract", "ledger", "event_index"]),
+            # Ledger-window queries filter a single contract by ledger range and
+            # order by recency. The `contract, ledger` prefix of the unique
+            # index above is not usable for the trailing `timestamp` ordering,
+            # so keep a dedicated composite covering the range + sort.
+            models.Index(
+                fields=["contract", "ledger", "timestamp"],
+                name="idx_event_contract_ledger_ts",
+            ),
             models.Index(fields=["invocation"]),
             models.Index(fields=["signature_status"]),
         ]

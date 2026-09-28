@@ -21,10 +21,9 @@ import logging
 import math
 import time
 
-from django.conf import settings
 from django.core.cache import cache
 from rest_framework.settings import api_settings
-from rest_framework.throttling import AnonRateThrottle, BaseThrottle, SimpleRateThrottle, ScopedRateThrottle
+from rest_framework.throttling import BaseThrottle, SimpleRateThrottle, ScopedRateThrottle
 
 logger = logging.getLogger(__name__)
 

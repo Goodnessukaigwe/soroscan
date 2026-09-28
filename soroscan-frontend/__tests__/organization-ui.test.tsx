@@ -7,8 +7,24 @@ import { OrganizationSwitcher } from "@/components/organization/OrganizationSwit
 import {
   __resetOrganizationStoreForTests,
   listTeamMembers,
+  updateTeamMemberRole,
 } from "@/lib/organization-store";
 import type { Organization, TeamMember } from "@/lib/organization";
+
+jest.mock("@/lib/organization-store", () => {
+  const actual = jest.requireActual("@/lib/organization-store");
+  return {
+    ...actual,
+    // Delegate to the real implementation by default so the rest of this file
+    // exercises the localStorage-backed store; individual tests override it to
+    // simulate a failed write.
+    updateTeamMemberRole: jest.fn(actual.updateTeamMemberRole),
+  };
+});
+
+const mockedUpdateTeamMemberRole = updateTeamMemberRole as jest.MockedFunction<
+  typeof updateTeamMemberRole
+>;
 
 jest.mock("next/link", () => {
   const MockLink = ({
@@ -96,6 +112,83 @@ describe("organization UI (#913)", () => {
     const select = screen.getByLabelText(/role for bob@acme.dev/i);
     fireEvent.change(select, { target: { value: "viewer" } });
     expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("surfaces a role-change failure instead of crashing the table", () => {
+    const members = listTeamMembers("org_acme");
+    const onChanged = jest.fn();
+    mockedUpdateTeamMemberRole.mockImplementationOnce(() => {
+      throw new Error("Failed to connect to API");
+    });
+
+    render(
+      <TeamMembersTable
+        organizationId="org_acme"
+        members={members}
+        currentRole="owner"
+        onChanged={onChanged}
+        onRequestRemove={jest.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/role for bob@acme.dev/i), {
+      target: { value: "viewer" },
+    });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Failed to connect to API");
+    // The table still renders its rows rather than blowing up.
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByText("bob@acme.dev")).toBeInTheDocument();
+    // The failed write must not be reported as a successful change.
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a generic message when the failure carries no text", () => {
+    const members = listTeamMembers("org_acme");
+    mockedUpdateTeamMemberRole.mockImplementationOnce(() => {
+      throw "not-an-error-object";
+    });
+
+    render(
+      <TeamMembersTable
+        organizationId="org_acme"
+        members={members}
+        currentRole="owner"
+        onChanged={jest.fn()}
+        onRequestRemove={jest.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/role for bob@acme.dev/i), {
+      target: { value: "viewer" },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Failed to update role");
+  });
+
+  it("clears a previous error once a role change succeeds", () => {
+    const members = listTeamMembers("org_acme");
+    mockedUpdateTeamMemberRole.mockImplementationOnce(() => {
+      throw new Error("Failed to connect to API");
+    });
+
+    render(
+      <TeamMembersTable
+        organizationId="org_acme"
+        members={members}
+        currentRole="owner"
+        onChanged={jest.fn()}
+        onRequestRemove={jest.fn()}
+      />,
+    );
+
+    const select = screen.getByLabelText(/role for bob@acme.dev/i);
+    fireEvent.change(select, { target: { value: "viewer" } });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: "operator" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("requires typing the email to confirm member removal", () => {

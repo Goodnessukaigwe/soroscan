@@ -272,7 +272,7 @@ export function WebhookTable({ webhooks, onDelete, onTest, onCreate, testingId, 
                 className="cursor-pointer select-none hover:text-terminal-green transition-colors"
                 onClick={() => toggleSort("status")}
               >
-                <span className="inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   STATUS
                   <SortDirectionIndicator active={sortField === "status"} direction={sortDir} />
                 </span>
@@ -281,7 +281,7 @@ export function WebhookTable({ webhooks, onDelete, onTest, onCreate, testingId, 
                 className="cursor-pointer select-none hover:text-terminal-green transition-colors"
                 onClick={() => toggleSort("url")}
               >
-                <span className="inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   ENDPOINT_URL
                   <SortDirectionIndicator active={sortField === "url"} direction={sortDir} />
                 </span>
@@ -291,7 +291,7 @@ export function WebhookTable({ webhooks, onDelete, onTest, onCreate, testingId, 
                 className="cursor-pointer select-none hover:text-terminal-green transition-colors"
                 onClick={() => toggleSort("successRate")}
               >
-                <span className="inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   SUCCESS
                   <SortDirectionIndicator active={sortField === "successRate"} direction={sortDir} />
                 </span>
@@ -300,7 +300,7 @@ export function WebhookTable({ webhooks, onDelete, onTest, onCreate, testingId, 
                 className="cursor-pointer select-none hover:text-terminal-green transition-colors"
                 onClick={() => toggleSort("lastDelivery")}
               >
-                <span className="inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   LAST_DELIVERY
                   <SortDirectionIndicator active={sortField === "lastDelivery"} direction={sortDir} />
                 </span>

@@ -5,7 +5,7 @@ import time
 import traceback
 from typing import Any, Callable, Dict, Optional
 
-from strawberry.extensions import SchemaExtension
+from strawberry.extensions import QueryDepthLimiter, SchemaExtension
 from strawberry.types import Info
 from strawberry.exceptions import StrawberryException
 from django.conf import settings
@@ -326,3 +326,17 @@ class GraphQLRateLimitExtension(SchemaExtension):
             return num_requests, duration
         except (ValueError, KeyError, IndexError):
             return None, None
+
+
+class MaxQueryDepthExtension(QueryDepthLimiter):
+    """
+    Reject queries nested deeper than ``max_depth`` (default 7).
+
+    Runs as a validation rule, so over-deep queries fail with a GraphQL error
+    (e.g. "'MyQuery' exceeds maximum operation depth of 7") before any
+    resolver executes.
+    """
+
+    def __init__(self, max_depth: int = 7, **kwargs):
+        self.max_depth = max_depth
+        super().__init__(max_depth=max_depth, **kwargs)

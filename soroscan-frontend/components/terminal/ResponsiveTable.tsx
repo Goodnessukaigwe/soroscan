@@ -170,7 +170,7 @@ export function ResponsiveTable<T = unknown>({
                       : column.sortable ? "none" : undefined
                   }
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     {column.label}
                     {column.sortable && (
                       <SortDirectionIndicator

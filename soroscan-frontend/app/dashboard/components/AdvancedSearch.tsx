@@ -103,15 +103,27 @@ export function AdvancedSearch({ onSearch, initialQuery = "" }: AdvancedSearchPr
           type="text"
           className={styles.searchInput}
           placeholder="Search with syntax (e.g. type:transfer amount:>1000)..."
+          aria-label="Search events with syntax"
           value={query}
           onChange={handleInputChange}
           onKeyDown={(e) => e.key === "Enter" && handleSearch(query)}
           onFocus={() => query.split(" ").pop() && suggestions.length > 0 && setShowSuggestions(true)}
         />
-        <button className={styles.saveBtn} onClick={toggleBookmark} title="Save Search">
+        <button
+          className={styles.saveBtn}
+          onClick={toggleBookmark}
+          title="Save Search"
+          aria-label={bookmarks.includes(query) ? "Remove saved search" : "Save search"}
+          aria-pressed={bookmarks.includes(query)}
+        >
           {bookmarks.includes(query) ? "★" : "☆"}
         </button>
-        <button className={styles.helpToggle} onClick={() => setShowHelp(!showHelp)}>
+        <button
+          className={styles.helpToggle}
+          onClick={() => setShowHelp(!showHelp)}
+          aria-label={showHelp ? "Hide search syntax guide" : "Show search syntax guide"}
+          aria-expanded={showHelp}
+        >
           ?
         </button>
         

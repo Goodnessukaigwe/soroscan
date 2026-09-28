@@ -77,13 +77,33 @@ class SoroScanClient:
         self._client = httpx.Client(timeout=timeout)
 
     def __enter__(self) -> "SoroScanClient":
+        """
+        Enter context manager.
+
+        Returns:
+            SoroScanClient instance
+        """
         return self
 
     def __exit__(self, *args: Any) -> None:
+        """
+        Exit context manager and close the HTTP client.
+
+        Args:
+            *args: Exception information (type, value, traceback)
+
+        Returns:
+            None
+        """
         self.close()
 
     def close(self) -> None:
-        """Close the HTTP client."""
+        """
+        Close the HTTP client connection.
+
+        Returns:
+            None
+        """
         self._client.close()
 
     def events(self) -> "EventQueryBuilder":
@@ -137,14 +157,34 @@ class SoroScanClient:
         return WebhookQueryBuilder(self)
 
     def _get_headers(self) -> dict[str, str]:
-        """Build request headers."""
+        """
+        Build request headers with authorization if available.
+
+        Returns:
+            Dictionary of HTTP headers including Content-Type and optional Authorization
+        """
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
     def _handle_response(self, response: httpx.Response) -> dict[str, Any]:
-        """Handle API response and raise appropriate exceptions."""
+        """
+        Handle API response and raise appropriate exceptions based on status code.
+
+        Args:
+            response: HTTP response object from httpx
+
+        Returns:
+            Parsed JSON response data as dictionary
+
+        Raises:
+            SoroScanValidationError: On HTTP 400 Bad Request
+            SoroScanAuthError: On HTTP 401 Unauthorized or 403 Forbidden
+            SoroScanNotFoundError: On HTTP 404 Not Found
+            SoroScanRateLimitError: On HTTP 429 Too Many Requests
+            SoroScanAPIError: On other HTTP errors (5xx, etc.)
+        """
         if response.status_code == 200 or response.status_code == 201:
             return response.json()  # type: ignore[no-any-return]
         elif response.status_code == 202:
@@ -805,13 +845,33 @@ class AsyncSoroScanClient:
         self._client = httpx.AsyncClient(timeout=timeout)
 
     async def __aenter__(self) -> "AsyncSoroScanClient":
+        """
+        Enter async context manager.
+
+        Returns:
+            AsyncSoroScanClient instance
+        """
         return self
 
     async def __aexit__(self, *args: Any) -> None:
+        """
+        Exit async context manager and close the HTTP client.
+
+        Args:
+            *args: Exception information (type, value, traceback)
+
+        Returns:
+            None
+        """
         await self.close()
 
     async def close(self) -> None:
-        """Close the HTTP client."""
+        """
+        Close the async HTTP client connection.
+
+        Returns:
+            None
+        """
         await self._client.aclose()
 
     def events(self) -> "AsyncEventQueryBuilder":
@@ -861,14 +921,34 @@ class AsyncSoroScanClient:
         return AsyncWebhookQueryBuilder(self)
 
     def _get_headers(self) -> dict[str, str]:
-        """Build request headers."""
+        """
+        Build request headers with authorization if available.
+
+        Returns:
+            Dictionary of HTTP headers including Content-Type and optional Authorization
+        """
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
     def _handle_response(self, response: httpx.Response) -> dict[str, Any]:
-        """Handle API response and raise appropriate exceptions."""
+        """
+        Handle API response and raise appropriate exceptions based on status code.
+
+        Args:
+            response: HTTP response object from httpx
+
+        Returns:
+            Parsed JSON response data as dictionary
+
+        Raises:
+            SoroScanValidationError: On HTTP 400 Bad Request
+            SoroScanAuthError: On HTTP 401 Unauthorized or 403 Forbidden
+            SoroScanNotFoundError: On HTTP 404 Not Found
+            SoroScanRateLimitError: On HTTP 429 Too Many Requests
+            SoroScanAPIError: On other HTTP errors (5xx, etc.)
+        """
         if response.status_code == 200 or response.status_code == 201:
             return response.json()  # type: ignore[no-any-return]
         elif response.status_code == 202:

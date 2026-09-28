@@ -69,7 +69,6 @@ from .models import (
     ContractHealthCheck,
     ContractDeployment,
     ContractVerification,
-    ContractSource,
     WebhookDeliveryLog,
     IngestError,
     DataRetentionPolicy,
@@ -81,6 +80,18 @@ from .rate_limit import check_ingest_rate
 from .stellar_client import SorobanClient
 from .metrics import webhook_payload_bytes
 from .streaming import get_producer
+from .constants import (
+    CACHE_KEY_WEBHOOK_DEDUP,
+    CACHE_KEY_WEBHOOK_ESCALATION,
+    CACHE_KEY_DEPENDENCY_CHANGE,
+    CACHE_KEY_ALERT_DEDUP,
+    CACHE_KEY_BUDGET_ALERT,
+    NOTIFICATION_TYPE_WEBHOOK_FAILURE,
+    NOTIFICATION_TYPE_ALERT,
+    NOTIFICATION_TYPE_CONTRACT_HEALTH,
+    NOTIFICATION_TITLE_WEBHOOK_SUSPENDED,
+    NOTIFICATION_TITLE_DEPENDENCY_CHANGE,
+)
 
 logger = logging.getLogger(__name__)
 BATCH_LEDGER_SIZE = 200
@@ -883,7 +894,7 @@ def dispatch_webhook(self, subscription_id: int, event_id: int, replay: bool = F
                 sort_keys=True,
             )
             dedup_hash = hashlib.sha256(dedup_material.encode("utf-8")).hexdigest()
-            dedup_key = f"soroscan:webhooks:dedup:{subscription_id}:{dedup_hash}"
+            dedup_key = f"{CACHE_KEY_WEBHOOK_DEDUP}:{subscription_id}:{dedup_hash}"
             if not cache.add(dedup_key, "1", timeout=dedup_window):
                 logger.info(
                     "Deduplicated webhook delivery for subscription=%s event=%s",
@@ -1531,7 +1542,7 @@ def _escalation_dedup_key(
     threshold: int,
 ) -> str:
     return (
-        f"soroscan:webhook_escalation:{webhook_id}:{event_id or 'none'}:"
+        f"{CACHE_KEY_WEBHOOK_ESCALATION}:{webhook_id}:{event_id or 'none'}:"
         f"{channel}:{threshold}"
     )
 
@@ -1691,8 +1702,8 @@ def _on_delivery_failure(
             owner = webhook.contract.owner
             create_and_push(
                 user=owner,
-                notification_type="webhook_failure",
-                title="Webhook Suspended",
+                notification_type=NOTIFICATION_TYPE_WEBHOOK_FAILURE,
+                title=NOTIFICATION_TITLE_WEBHOOK_SUSPENDED,
                 message=(
                     f"Webhook to {webhook.target_url} for contract "
                     f"'{webhook.contract.name}' has been suspended after "
@@ -1731,6 +1742,82 @@ def cleanup_webhook_delivery_logs() -> int:
         task_name="cleanup_webhook_delivery_logs"
     ).observe(time.monotonic() - _start)
     return deleted_count
+
+
+_PARTITION_UPPER_BOUND_RE = re.compile(r"TO \('([^']+)'\)")
+
+
+@shared_task(name="soroscan.ingest.tasks.detach_expired_event_partitions")
+def detach_expired_event_partitions() -> list[str]:
+    """
+    Detach ``ContractEvent`` range partitions that lie entirely before the
+    retention cutoff (``SOROSCAN_EVENT_RETENTION_DAYS`` days, default 90).
+
+    Detached tables are kept (not dropped) so they can be archived. The
+    DEFAULT partition is never detached. No-op on non-PostgreSQL backends.
+    Returns the names of the detached partitions (Issue #1404).
+    """
+    from django.db import connection
+    from django.utils.dateparse import parse_datetime
+
+    from .models import ContractEvent
+
+    if connection.vendor != "postgresql":
+        return []
+
+    retention_days = int(getattr(settings, "SOROSCAN_EVENT_RETENTION_DAYS", 90))
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    parent_table = ContractEvent._meta.db_table
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT child.relname, pg_get_expr(child.relpartbound, child.oid)
+            FROM pg_inherits
+            JOIN pg_class parent ON pg_inherits.inhparent = parent.oid
+            JOIN pg_class child ON pg_inherits.inhrelid = child.oid
+            WHERE parent.relname = %s
+            """,
+            [parent_table],
+        )
+        partitions = cursor.fetchall()
+
+    detached = []
+    for name, bound in partitions:
+        match = _PARTITION_UPPER_BOUND_RE.search(bound or "")
+        if not match:
+            continue  # DEFAULT partition or MAXVALUE upper bound
+        upper = parse_datetime(match.group(1))
+        if upper is None:
+            continue
+        if timezone.is_naive(upper):
+            upper = timezone.make_aware(upper, dt_timezone.utc)
+        if upper > cutoff:
+            continue
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"ALTER TABLE {connection.ops.quote_name(parent_table)} "
+                    f"DETACH PARTITION {connection.ops.quote_name(name)}"
+                )
+        except Exception:
+            logger.exception("Failed to detach expired event partition %s", name)
+            continue
+        detached.append(name)
+        logger.info(
+            "Detached expired event partition %s (upper bound %s, cutoff %s)",
+            name,
+            upper.isoformat(),
+            cutoff.isoformat(),
+            extra={"partition": name, "retention_days": retention_days},
+        )
+
+    logger.info(
+        "detach_expired_event_partitions: detached %d partition(s): %s",
+        len(detached),
+        ", ".join(detached) or "none",
+    )
+    return detached
 
 
 @shared_task(name="soroscan.ingest.tasks.warm_contract_name_cache")
@@ -2209,13 +2296,13 @@ def alert_downstream_contract_change(contract_id: str, change_type: str = "modif
     notified = 0
     dedup_ttl = int(getattr(settings, "DOWNSTREAM_ALERT_DEDUP_SECONDS", 3600))
     for dep in dependents:
-        cache_key = f"soroscan:dependency_change:{dep.caller_id}:{dep.callee_id}:{change_type}"
+        cache_key = f"{CACHE_KEY_DEPENDENCY_CHANGE}:{dep.caller_id}:{dep.callee_id}:{change_type}"
         if not cache.add(cache_key, "1", timeout=dedup_ttl):
             continue
         create_and_push(
             user=dep.caller.owner,
-            notification_type="alert",
-            title="Dependency Change Detected",
+            notification_type=NOTIFICATION_TYPE_ALERT,
+            title=NOTIFICATION_TITLE_DEPENDENCY_CHANGE,
             message=(
                 f"Dependency contract '{changed_contract.name}' ({changed_contract.contract_id}) "
                 f"was {change_type}. This may impact '{dep.caller.name}'."
@@ -3198,7 +3285,7 @@ def send_alert(self, rule_id: int, event_id: int) -> str:
         sort_keys=True,
     )
     dedup_hash = hashlib.sha256(dedup_material.encode("utf-8")).hexdigest()
-    dedup_key = f"soroscan:alerts:dedup:{rule.id}:{dedup_hash}"
+    dedup_key = f"{CACHE_KEY_ALERT_DEDUP}:{rule.id}:{dedup_hash}"
     if not cache.add(dedup_key, "1", timeout=dedup_window):
         _get_metrics().alert_deduplicated_total.labels(scope="alert_rule").inc()
         logger.info(
@@ -3430,12 +3517,12 @@ def _emit_budget_alerts(
     for threshold, level in thresholds:
         if utilization < _decimal(threshold):
             continue
-        dedup_key = f"soroscan:budget_alert:{org.id}:{month_tag}:{threshold}"
+        dedup_key = f"{CACHE_KEY_BUDGET_ALERT}:{org.id}:{month_tag}:{threshold}"
         if not cache.add(dedup_key, "1", timeout=3600):
             continue
         create_and_push(
             user=org.owner,
-            notification_type="alert",
+            notification_type=NOTIFICATION_TYPE_ALERT,
             title=f"Budget {level.title()} Threshold Reached",
             message=(
                 f"Projected monthly cost is ${snapshot.projected_monthly_cost_usd} "
@@ -3681,6 +3768,88 @@ def replay_dead_letter(self, dead_letter_id: int) -> dict[str, Any]:
     return {"status": "replayed", "dlq_id": dead_letter_id}
 
 
+@shared_task(
+    name="ingest.tasks.replay_dead_letter_webhooks",
+    bind=True,
+    max_retries=2,
+    soft_time_limit=60,
+)
+def replay_dead_letter_webhooks(
+    self,
+    delivery_ids: list[int] | None = None,
+    contract_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Batch re-queue dead-lettered webhook deliveries (issue #1406).
+
+    Selects ``WebhookDeliveryLog`` rows that are in ``dead_letter`` state,
+    either by explicit ``delivery_ids`` or by every delivery belonging to
+    ``contract_id``, resets them to ``pending``, and re-dispatches each one
+    through the ``webhook_dispatch`` queue (``ingest.tasks.dispatch_webhook``)
+    with ``replay=True`` so delivery de-duplication does not suppress the
+    retry.
+
+    Rows without an event cannot be redelivered and are counted as skipped.
+    Suspended subscriptions are re-activated first, because
+    ``dispatch_webhook`` skips inactive subscriptions and the replay would
+    otherwise be silently dropped.
+
+    ``WebhookDeadLetter`` rows are intentionally left untouched so this batch
+    path and the single-entry :func:`replay_dead_letter` path cannot resolve
+    the same entry twice.
+    """
+    if not delivery_ids and not contract_id:
+        return {
+            "status": "skipped",
+            "reason": "no_selection",
+            "requeued": 0,
+            "skipped": 0,
+        }
+
+    qs = WebhookDeliveryLog.objects.filter(
+        status=WebhookDeliveryLog.STATUS_DEAD_LETTER
+    ).select_related("subscription")
+
+    if delivery_ids:
+        qs = qs.filter(id__in=delivery_ids)
+    if contract_id:
+        qs = qs.filter(subscription__contract__contract_id=contract_id)
+
+    requeued = 0
+    skipped = 0
+    for delivery in qs.iterator():
+        if delivery.event_id is None:
+            skipped += 1
+            continue
+
+        subscription = delivery.subscription
+        if (
+            not subscription.is_active
+            or subscription.status != WebhookSubscription.STATUS_ACTIVE
+        ):
+            WebhookSubscription.objects.filter(pk=subscription.pk).update(
+                is_active=True,
+                status=WebhookSubscription.STATUS_ACTIVE,
+                failure_count=0,
+            )
+            subscription.refresh_from_db()
+
+        WebhookDeliveryLog.objects.filter(pk=delivery.pk).update(
+            status=WebhookDeliveryLog.STATUS_PENDING
+        )
+        dispatch_webhook.delay(subscription.id, delivery.event_id, replay=True)
+        requeued += 1
+
+    logger.info(
+        "Batch DLQ replay complete: requeued=%s skipped=%s contract_id=%s",
+        requeued,
+        skipped,
+        contract_id or "",
+        extra={"requeued": requeued, "skipped": skipped},
+    )
+    return {"status": "ok", "requeued": requeued, "skipped": skipped}
+
+
 def _check_single_contract_health(contract: TrackedContract, now=None, cutoff_1h=None) -> tuple[str, str]:
     """
     Checks and updates health status for a single contract.
@@ -3795,7 +3964,7 @@ def send_health_alert(contract_id: str, status: str, message: str) -> str:
             title=f"Contract Health Alert: {status.upper()}",
             message=f"Contract '{contract.name or contract.contract_id}' status changed to {status}: {message}",
             link=f"/contracts/{contract.contract_id}",
-            notification_type="contract_health",
+            notification_type=NOTIFICATION_TYPE_CONTRACT_HEALTH,
         )
     return "sent"
 
@@ -4093,20 +4262,131 @@ def cleanup_silk_data(days_to_keep: int = 7) -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# Issue #1403: automated ContractEvent partition creation (Celery Beat)
+# ---------------------------------------------------------------------------
+
+# Current month plus this many upcoming months are kept pre-created so
+# ingest never races a month boundary.
+PARTITION_MONTHS_AHEAD = 2
+
+# Parent table name from issue #1403. On PostgreSQL the partitioned parent is
+# detected at runtime (migration 0054_contractevent_partitioning partitioned
+# the model's real table), falling back to this name elsewhere.
+EVENT_PARTITION_PARENT = "contract_events"
 
 
+def _add_months(value: date, months: int) -> date:
+    """Return the first day of the month ``months`` after ``value``."""
+    month_index = value.year * 12 + (value.month - 1) + months
+    return date(month_index // 12, month_index % 12 + 1, 1)
+
+
+def event_partition_windows(
+    parent: str = EVENT_PARTITION_PARENT,
+    today: date | None = None,
+) -> list[tuple[str, str, str]]:
+    """Return ``(table, range_start, range_end)`` for current + next 2 months.
+
+    ``table`` follows the ``<parent>_yYYYYmMM`` convention; the range bounds
+    are ISO dates covering each full calendar month.
+    """
+    month_start = (today or timezone.localdate()).replace(day=1)
+    windows: list[tuple[str, str, str]] = []
+    for offset in range(PARTITION_MONTHS_AHEAD + 1):
+        start = _add_months(month_start, offset)
+        end = _add_months(start, 1)
+        table = f"{parent}_y{start.year}m{start.month:02d}"
+        windows.append((table, start.isoformat(), end.isoformat()))
+    return windows
+
+
+def _detect_event_partition_parent() -> str:
+    """Return the partitioned ContractEvent parent table name.
+
+    Uses the real model table when it exists as a partitioned table on
+    PostgreSQL; otherwise falls back to ``EVENT_PARTITION_PARENT``.
+    """
+    from django.db import connection  # noqa: PLC0415
+
+    if connection.vendor != "postgresql":
+        return EVENT_PARTITION_PARENT
+
+    candidates: list[str] = []
+    for name in (ContractEvent._meta.db_table, EVENT_PARTITION_PARENT):
+        if name and name not in candidates:
+            candidates.append(name)
+
+    from django.db import DatabaseError  # noqa: PLC0415
+
+    try:
+        with connection.cursor() as cursor:
+            for name in candidates:
+                cursor.execute(
+                    "SELECT c.relkind = 'p' FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = current_schema() AND c.relname = %s",
+                    [name],
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return name
+    except DatabaseError as exc:
+        logger.warning("Could not detect partitioned parent table: %s", exc)
+
+    return EVENT_PARTITION_PARENT
+
+
+@shared_task
+def create_upcoming_event_partitions() -> dict[str, Any]:
+    """
+    Pre-create monthly ContractEvent partitions (issue #1403).
+
+    Executes ``CREATE TABLE IF NOT EXISTS <parent>_yYYYYmMM PARTITION OF
+    <parent>`` for the current month and the next two months, so the task is
+    idempotent and safe to run repeatedly from Celery Beat.
+
+    Migration ``0054_contractevent_partitioning`` made the events table
+    partitioned by ``timestamp`` range on PostgreSQL. On other backends (the
+    SQLite test suite) statements that the backend rejects are recorded as
+    errors instead of raising, so the task itself never fails.
+    """
+    from django.db import DatabaseError, connection  # noqa: PLC0415
+
+    parent = _detect_event_partition_parent()
+    windows = event_partition_windows(parent)
+
+    created: list[str] = []
+    errors: list[str] = []
+
+    with connection.cursor() as cursor:
+        for table, range_start, range_end in windows:
+            sql = (
+                f"CREATE TABLE IF NOT EXISTS {table} PARTITION OF {parent} "
+                f"FOR VALUES FROM ('{range_start}') TO ('{range_end}')"
+            )
+            try:
+                cursor.execute(sql)
+                created.append(table)
+            except DatabaseError as exc:
+                errors.append(f"{table}: {exc}")
+                # The connection/transaction may be unusable after a failed
+                # statement — stop rather than hammering it twice more.
+                logger.warning(
+                    "Could not create partition %s for %s: %s", table, parent, exc
+                )
+                break
+
+    summary = {
+        "parent": parent,
+        "partitions": [table for table, _, _ in windows],
+        "created": created,
+        "errors": errors,
+    }
     logger.info(
-        "Health alert sent for contract %s (status=%s)",
-        contract_id,
-        status,
-        extra={"contract_id": contract_id, "health_status": status},
+        "create_upcoming_event_partitions: parent=%s created=%d errors=%d",
+        parent,
+        len(created),
+        len(errors),
     )
-    return "sent"
-
-
-@shared_task(bind=True, max_retries=0)
-def run_webhook_replay_job(self, job_id: int) -> dict[str, Any]:
-    """Celery entrypoint for webhook replay jobs (issue #1329)."""
-    from soroscan.ingest.services.webhook_replay import run_replay_job
-
-    return run_replay_job(job_id)
+    return summary

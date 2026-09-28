@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import requests
 from celery.exceptions import TimeoutError as CeleryTimeoutError
-from django.core.cache import cache
 from django.db import connection
 
 

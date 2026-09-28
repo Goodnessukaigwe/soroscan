@@ -553,6 +553,22 @@ class WebhookDeliveryLogSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class DLQDeliveryLogSerializer(WebhookDeliveryLogSerializer):
+    """
+    Dead-lettered WebhookDeliveryLog entry, including the contract it belongs to.
+
+    Exposed via ``GET /api/v1/webhooks/dlq/`` (Issue #1405).
+    """
+
+    contract_id = serializers.CharField(
+        source="subscription.contract.contract_id", read_only=True
+    )
+
+    class Meta(WebhookDeliveryLogSerializer.Meta):
+        fields = WebhookDeliveryLogSerializer.Meta.fields + ["contract_id"]
+        read_only_fields = fields
+
+
 class RecordEventRequestSerializer(serializers.Serializer):
 
     """

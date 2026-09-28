@@ -134,6 +134,7 @@ function FilterForm({
               className={styles.fieldInput}
               list="event-tag-suggestions"
               placeholder="add tag filter"
+              aria-label="Add tag filter"
               value={tagInput}
               onChange={(e) => setTagInput(e.target.value)}
               onKeyDown={(e) => {
@@ -149,6 +150,7 @@ function FilterForm({
               style={{ padding: "0.45rem 0.75rem", minWidth: "auto" }}
               onClick={onAddTagFilter}
               title="Add tag filter"
+              aria-label="Add tag filter"
             >
               +
             </button>
@@ -175,6 +177,7 @@ function FilterForm({
                       padding: 0,
                     }}
                     title={`Remove ${tag}`}
+                    aria-label={`Remove tag filter ${tag}`}
                   >
                     x
                   </button>
@@ -327,6 +330,7 @@ export function FilterBar({
           data-testid="filter-panel-toggle"
           aria-expanded={drawerOpen}
           aria-controls="mobile-filter-panel"
+          aria-label={drawerOpen ? "Close event filters" : "Open event filters"}
         >
           <Filter size={16} aria-hidden="true" />
           Filters

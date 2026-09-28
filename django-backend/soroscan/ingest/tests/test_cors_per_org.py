@@ -130,7 +130,7 @@ class TestOrgCorsMiddleware:
         invalidate_org_cors_cache()
         req = self._make_request(origin="https://unknown.example.com")
 
-        with patch("soroscan.cors_middleware._load_org_origins", return_value={}):
+        with patch("soroscan.cors_middleware._get_org_origins", return_value={}):
             invalidate_org_cors_cache()
             middleware = OrgCorsMiddleware(lambda r: _simple_response())
             resp = middleware(req)
@@ -171,7 +171,7 @@ class TestOrgCorsMiddleware:
         """Origins already in CORS_ALLOWED_ORIGINS are handled by CorsHeaders; we skip them."""
         req = self._make_request(origin="https://global.example.com")
 
-        # If the middleware reached _load_org_origins it would hit the DB.
+        # If the middleware reached _get_org_origins it would hit the DB.
         # We assert it does NOT by verifying the response has no ACAO from us
         # (CorsHeaders isn't in this test chain, so the header is simply absent).
         called = []
@@ -180,7 +180,7 @@ class TestOrgCorsMiddleware:
             called.append(True)
             return {}
 
-        with patch("soroscan.cors_middleware._load_org_origins", side_effect=_fake_load):
+        with patch("soroscan.cors_middleware._get_org_origins", side_effect=_fake_load):
             invalidate_org_cors_cache()
             middleware = OrgCorsMiddleware(lambda r: _simple_response())
             middleware(req)

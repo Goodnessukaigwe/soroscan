@@ -74,7 +74,7 @@ function NavLink({
         "flex items-center gap-3 min-h-[44px] px-4 py-2 text-sm font-terminal-mono transition-colors rounded-sm",
         "border-l-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terminal-green",
         isActive
-          ? "border-terminal-green bg-terminal-green/10 text-terminal-green shadow-[0_0_12px_rgba(0,255,65,0.15)]"
+          ? "border-terminal-green bg-terminal-green/10 text-terminal-green shadow-[0_0_12px_rgba(0,255,65,0.15)] dark:border-terminal-green dark:bg-terminal-green/10 dark:text-terminal-green"
           : "border-transparent text-terminal-gray hover:text-terminal-green hover:bg-terminal-green/5 hover:border-terminal-green/40",
       )}
     >

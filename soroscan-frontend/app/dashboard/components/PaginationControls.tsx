@@ -42,6 +42,7 @@ export function PaginationControls({
         disabled={currentPage === 1}
         onClick={() => onPageChange(1)}
         title="First page"
+        aria-label="Go to first page"
       >
         ◄◄
       </button>
@@ -52,6 +53,7 @@ export function PaginationControls({
         disabled={!hasPrev}
         onClick={() => onPageChange(currentPage - 1)}
         title="Previous page"
+        aria-label="Go to previous page"
       >
         ◄ Previous
       </button>
@@ -78,6 +80,7 @@ export function PaginationControls({
         disabled={!hasNext}
         onClick={() => onPageChange(currentPage + 1)}
         title="Next page"
+        aria-label="Go to next page"
       >
         Next ►
       </button>
@@ -91,6 +94,7 @@ export function PaginationControls({
           onPageChange(currentPage + 10);
         }}
         title="Jump forward"
+        aria-label="Jump forward 10 pages"
       >
         ►►
       </button>

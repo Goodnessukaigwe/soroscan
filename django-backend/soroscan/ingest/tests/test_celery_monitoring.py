@@ -10,13 +10,12 @@ Covers:
 - OperationalHealthCollector exposes queue depth and worker metrics
 """
 
-import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import yaml
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from prometheus_client import REGISTRY
 
 REPO_ROOT = Path(__file__).resolve().parents[4]

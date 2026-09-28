@@ -4,11 +4,6 @@ import pytest
 from soroscan.ingest.event_schemas import (
     CONTRACT_EVENT_SCHEMAS,
     SC20_TRANSFER_SCHEMA,
-    SC20_MINT_SCHEMA,
-    SC21_TRANSFER_SCHEMA,
-    SC31_SWAP_SCHEMA,
-    SC36_MINT_TEST_TOKENS_SCHEMA,
-    SC38_RECORD_EVENT_SCHEMA,
     get_schema_for_event,
     validate_against_standard_schema,
 )
@@ -29,7 +24,6 @@ def contract():
 class TestContractEventSchemas:
     def test_all_schemas_are_valid_json_schema(self):
         """Every registered schema must be a valid JSON Schema object."""
-        import jsonschema
 
         for key, schema in CONTRACT_EVENT_SCHEMAS.items():
             assert schema["type"] == "object", f"Schema {key} must be type: object"

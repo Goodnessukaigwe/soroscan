@@ -163,6 +163,8 @@ export function EventDetailModal({ event, onClose }: EventDetailModalProps) {
                     onClick={() => {
                       setPayloadView('json');
                     }}
+                    aria-label="View payload as JSON"
+                    aria-pressed={payloadView === 'json'}
                   >
                     JSON
                   </button>
@@ -178,6 +180,8 @@ export function EventDetailModal({ event, onClose }: EventDetailModalProps) {
                     onClick={() => {
                       setPayloadView('hex');
                     }}
+                    aria-label="View payload as HEX"
+                    aria-pressed={payloadView === 'hex'}
                   >
                     HEX
                   </button>
@@ -190,6 +194,7 @@ export function EventDetailModal({ event, onClose }: EventDetailModalProps) {
                       fontSize: '0.75rem',
                       minWidth: 'auto',
                     }}
+                    aria-label="Copy event payload to clipboard"
                     onClick={() => {
                       void copyToClipboard(
                         payloadView === 'json' ? payloadJson : payloadHex,

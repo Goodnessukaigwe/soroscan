@@ -37,3 +37,20 @@ def celery_config():
 @pytest.fixture(autouse=True)
 def enable_db_access_for_all_tests(db):
     pass
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(items):
+    """Run the migration rollback tests after all other tests.
+
+    Their forward/rollback dance leaves ingest and auth schema partially
+    reverted (with django_migrations rows missing), so anything running
+    afterwards can see a broken schema. trylast makes this run after
+    pytest-django's own modifyitems hook, which buckets transactional tests.
+    """
+    name = "test_migration_rollbacks.py"
+    if any(item.path.name == name for item in items):
+        items[:] = (
+            [item for item in items if item.path.name != name]
+            + [item for item in items if item.path.name == name]
+        )

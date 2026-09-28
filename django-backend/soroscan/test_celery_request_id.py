@@ -6,7 +6,6 @@ Verifies that:
 2. task_prerun restores the request_id from headers into the log context.
 3. The get_request_id() helper returns the propagated value.
 """
-import pytest
 from unittest.mock import MagicMock, patch
 
 from soroscan.log_context import (
