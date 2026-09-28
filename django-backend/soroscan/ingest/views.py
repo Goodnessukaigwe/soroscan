@@ -14,18 +14,19 @@ from django.db.models import Count, Max, Min, Q, Avg, Sum
 from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.decorators import method_decorator
-from django.views.decorators.cache import cache_control, cache_page
-from django.views.decorators.vary import vary_on_headers
+from django.views.decorators.cache import cache_control
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, inline_serializer, OpenApiParameter
 from rest_framework import renderers, serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.pagination import PageNumberPagination
 
 import requests as http_requests
@@ -67,6 +68,7 @@ from .serializers import (
     ContractSnapshotSerializer,
     ContractSourceSerializer,
     ContractVerificationSerializer,
+    DLQDeliveryLogSerializer,
     EventDeduplicationConfigSerializer,
     EventDeduplicationTestSerializer,
     EventSearchSerializer,
@@ -92,7 +94,27 @@ logger = logging.getLogger(__name__)
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = "page_size"
-    max_page_size = 1000
+    max_page_size = 100
+
+    def get_page_size(self, request):
+        page_size_param = request.query_params.get(self.page_size_query_param)
+        if page_size_param is not None:
+            try:
+                page_size = int(page_size_param)
+            except (ValueError, TypeError):
+                raise DRFValidationError(
+                    {"page_size": "page_size must be a valid integer."}
+                )
+            if page_size <= 0:
+                raise DRFValidationError(
+                    {"page_size": "page_size must be greater than 0."}
+                )
+            if page_size > self.max_page_size:
+                raise DRFValidationError(
+                    {"page_size": f"page_size must be <= {self.max_page_size}."}
+                )
+            return page_size
+        return self.page_size
 
 
 class AdminActionSerializer(serializers.ModelSerializer):
@@ -679,7 +701,7 @@ class ContractEventViewSet(viewsets.ReadOnlyModelViewSet):
         - payload_field     — dot-notation field path, e.g. decodedPayload.to
         - payload_op        — operator: eq|neq|gte|lte|gt|lt|contains|startswith|in
         - payload_value     — value for field comparison
-        - page / page_size  — pagination (max 1000 per page)
+        - page / page_size  — pagination (max 100 per page)
         """
         qs = ContractEvent.objects.select_related("contract").all()
 
@@ -741,12 +763,37 @@ class ContractEventViewSet(viewsets.ReadOnlyModelViewSet):
                 qs = qs.filter(**{f"{orm_path}{suffix}": payload_value})
 
         # --- pagination -------------------------------------------------------
+        # Validate page / page_size strictly: invalid values return 400.
+        # Maximum page size enforced at 100 (issue #1433).
         try:
-            page = max(1, int(request.GET.get("page", 1)))
-            page_size = min(max(1, int(request.GET.get("page_size", 50))), 1000)
+            page = int(request.GET.get("page", 1))
         except (ValueError, TypeError):
-            page = 1
-            page_size = 50
+            return Response(
+                {"detail": "page must be a valid integer greater than 0."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if page <= 0:
+            return Response(
+                {"detail": "page must be greater than 0."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            page_size = int(request.GET.get("page_size", 50))
+        except (ValueError, TypeError):
+            return Response(
+                {"detail": "page_size must be a valid integer greater than 0."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if page_size <= 0:
+            return Response(
+                {"detail": "page_size must be greater than 0."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if page_size > 100:
+            return Response(
+                {"detail": "page_size must be <= 100."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         qs = qs.order_by("-timestamp")
         cache_key = stable_cache_key(
@@ -3815,3 +3862,60 @@ def dlq_replay_view(request):
         queued += 1
 
     return Response({"queued": queued, "skipped": skipped})
+
+
+class DLQDeliveryLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Paginated list of dead-lettered webhook delivery logs (Issue #1405).
+
+    ``GET /api/v1/webhooks/dlq/``
+
+    Query params:
+    - ``contract_id`` — filter by tracked contract ID
+    - ``start_date`` / ``end_date`` — ISO 8601 date or datetime bounds on ``timestamp``
+    - ``status`` — filter by HTTP status code returned by the subscriber
+
+    Non-staff users only see logs for webhooks on contracts they own.
+    """
+
+    serializer_class = DLQDeliveryLogSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = (
+            WebhookDeliveryLog.objects.filter(status=WebhookDeliveryLog.STATUS_DEAD_LETTER)
+            .select_related("subscription__contract", "event")
+            .order_by("-timestamp")
+        )
+        if not self.request.user.is_staff:
+            qs = qs.filter(subscription__contract__owner=self.request.user)
+
+        params = self.request.query_params
+
+        contract_id = params.get("contract_id")
+        if contract_id:
+            qs = qs.filter(subscription__contract__contract_id=contract_id)
+
+        for param, lookup in (("start_date", "gte"), ("end_date", "lte")):
+            value = params.get(param)
+            if not value:
+                continue
+            try:
+                parsed_dt = parse_datetime(value)
+                parsed_d = None if parsed_dt else parse_date(value)
+            except ValueError:
+                parsed_dt = parsed_d = None
+            if parsed_dt is not None:
+                qs = qs.filter(**{f"timestamp__{lookup}": parsed_dt})
+            elif parsed_d is not None:
+                qs = qs.filter(**{f"timestamp__date__{lookup}": parsed_d})
+            else:
+                raise ValidationError({param: "Invalid date; use ISO 8601."})
+
+        status_code = params.get("status")
+        if status_code:
+            if not status_code.isdigit():
+                raise ValidationError({"status": "Must be an integer HTTP status code."})
+            qs = qs.filter(status_code=int(status_code))
+
+        return qs

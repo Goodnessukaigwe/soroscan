@@ -97,6 +97,7 @@ export function JsonHighlight({
       <button
         type="button"
         onClick={copyToClipboard}
+        aria-label={copied ? "JSON copied to clipboard" : "Copy JSON to clipboard"}
         style={{
           position: "absolute",
           top: "0.5rem",

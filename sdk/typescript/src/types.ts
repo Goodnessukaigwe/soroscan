@@ -7,7 +7,7 @@ export interface SoroScanClientConfig {
   baseUrl: string;
   /** Optional API key sent as Bearer token */
   apiKey?: string;
-  /** Request timeout in milliseconds (default: 30_000) */
+  /** Request timeout in milliseconds (default: 10_000) */
   timeoutMs?: number;
   /** Maximum retry attempts after the initial request (default: 3) */
   maxRetries?: number;
@@ -78,7 +78,7 @@ export interface ContractEventTopic {
   value: string;
 }
 
-export interface ContractEvent {
+export interface ContractEvent<T = unknown> {
   id: string;
   ledger: number;
   ledgerClosedAt: ISODateString;
@@ -86,7 +86,7 @@ export interface ContractEvent {
   contractId: ContractId;
   type: EventType;
   topics: ContractEventTopic[];
-  value: unknown;
+  value: T;
   inSuccessfulContractCall: boolean;
   pagingToken: string;
 }

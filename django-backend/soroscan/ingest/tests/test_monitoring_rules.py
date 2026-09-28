@@ -1,5 +1,6 @@
 """Validation for Prometheus alert rules and operational metrics."""
 
+import asyncio
 from pathlib import Path
 
 import yaml
@@ -64,10 +65,12 @@ def test_error_middleware_records_service_and_root_cause_labels():
         view="unresolved",
         error_type="http_503",
     )._value.get()
-    middleware = ErrorRateMetricsMiddleware(
-        lambda request: JsonResponse({"detail": "down"}, status=503)
-    )
-    response = middleware(RequestFactory().get("/health"))
+
+    async def get_response(request):
+        return JsonResponse({"detail": "down"}, status=503)
+
+    middleware = ErrorRateMetricsMiddleware(get_response)
+    response = asyncio.run(middleware(RequestFactory().get("/health")))
     after = http_responses_total.labels(
         service="soroscan-backend",
         status_class="5xx",

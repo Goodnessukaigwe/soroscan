@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -25,8 +26,14 @@ def request_factory():
     return RequestFactory()
 
 
-def _ok_response(_request):
+async def _ok_response(_request):
+    # The middleware is async (c27dd70b); get_response must be awaitable.
     return JsonResponse({"ok": True})
+
+
+def _call(middleware, request):
+    """Run the async middleware from a synchronous test."""
+    return asyncio.run(middleware(request))
 
 
 @pytest.mark.django_db
@@ -48,7 +55,7 @@ def test_organization_and_api_key_have_subscription_tiers():
     assert api_key.tier == APIKey.Tier.ENTERPRISE
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_x_api_key_sliding_window_returns_429_and_reset_header(
     request_factory,
     monkeypatch,
@@ -64,9 +71,9 @@ def test_x_api_key_sliding_window_returns_429_and_reset_header(
 
     middleware = TieredAPIKeyRateLimitMiddleware(_ok_response)
 
-    first = middleware(request_factory.get("/", HTTP_X_API_KEY=api_key.key))
-    second = middleware(request_factory.get("/", HTTP_X_API_KEY=api_key.key))
-    blocked = middleware(request_factory.get("/", HTTP_X_API_KEY=api_key.key))
+    first = _call(middleware, request_factory.get("/", HTTP_X_API_KEY=api_key.key))
+    second = _call(middleware, request_factory.get("/", HTTP_X_API_KEY=api_key.key))
+    blocked = _call(middleware, request_factory.get("/", HTTP_X_API_KEY=api_key.key))
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -75,7 +82,7 @@ def test_x_api_key_sliding_window_returns_429_and_reset_header(
     assert int(blocked["X-RateLimit-Reset"]) > int(time.time())
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_organization_tier_controls_team_api_key_limit(
     request_factory,
     monkeypatch,
@@ -109,9 +116,9 @@ def test_organization_tier_controls_team_api_key_limit(
 
     middleware = TieredAPIKeyRateLimitMiddleware(_ok_response)
 
-    first = middleware(request_factory.get("/", HTTP_X_API_KEY=api_key.key))
-    second = middleware(request_factory.get("/", HTTP_X_API_KEY=api_key.key))
-    blocked = middleware(request_factory.get("/", HTTP_X_API_KEY=api_key.key))
+    first = _call(middleware, request_factory.get("/", HTTP_X_API_KEY=api_key.key))
+    second = _call(middleware, request_factory.get("/", HTTP_X_API_KEY=api_key.key))
+    blocked = _call(middleware, request_factory.get("/", HTTP_X_API_KEY=api_key.key))
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -119,7 +126,7 @@ def test_organization_tier_controls_team_api_key_limit(
     assert blocked.status_code == 429
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_enterprise_organization_is_unlimited(request_factory):
     user = User.objects.create_user(username="enterprise-user")
     organization = Organization.objects.create(
@@ -148,8 +155,9 @@ def test_enterprise_organization_is_unlimited(request_factory):
     middleware = TieredAPIKeyRateLimitMiddleware(_ok_response)
 
     for _ in range(5):
-        response = middleware(
-            request_factory.get("/", HTTP_X_API_KEY=api_key.key)
+        response = _call(
+            middleware,
+            request_factory.get("/", HTTP_X_API_KEY=api_key.key),
         )
         assert response.status_code == 200
 
@@ -158,7 +166,7 @@ def test_enterprise_organization_is_unlimited(request_factory):
 def test_requests_without_x_api_key_are_not_rate_limited(request_factory):
     middleware = TieredAPIKeyRateLimitMiddleware(_ok_response)
 
-    response = middleware(request_factory.get("/"))
+    response = _call(middleware, request_factory.get("/"))
 
     assert response.status_code == 200
     assert "X-RateLimit-Reset" not in response

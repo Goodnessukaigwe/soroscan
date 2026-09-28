@@ -61,16 +61,16 @@ export function EventTableSkeleton({ showTags = false }: { showTags?: boolean })
       <table className={`${styles.eventTable} soroscan-events-table-sk`}>
         <thead>
           <tr>
-            <th className={toolbarStyles.checkboxCell} aria-hidden="true">
+            <th className={`${toolbarStyles.checkboxCell} text-xs font-semibold uppercase tracking-wider text-muted-foreground`} aria-hidden="true">
               <Skeleton variant="rectangle" width={16} height={16} />
             </th>
-            <th>Contract</th>
-            <th>Type</th>
-            <th>Ledger</th>
-            <th>Time</th>
-            <th>Transaction</th>
-            {showTags && <th>Tags</th>}
-            <th>Actions</th>
+            <th className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Contract</th>
+            <th className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</th>
+            <th className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Ledger</th>
+            <th className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Time</th>
+            <th className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Transaction</th>
+            {showTags && <th className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Tags</th>}
+            <th className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Actions</th>
           </tr>
         </thead>
         <tbody>

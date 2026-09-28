@@ -304,12 +304,12 @@ export function EventExplorerView({ contractId }: { contractId: string }) {
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Timestamp</th>
-                  <th scope="col">Type</th>
-                  <th scope="col">Ledger</th>
-                  <th scope="col">Event Index</th>
-                  <th scope="col">Transaction</th>
-                  <th scope="col">Payload</th>
+                  <th scope="col" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Timestamp</th>
+                  <th scope="col" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</th>
+                  <th scope="col" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Ledger</th>
+                  <th scope="col" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Event Index</th>
+                  <th scope="col" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Transaction</th>
+                  <th scope="col" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Payload</th>
                 </tr>
               </thead>
               <tbody>

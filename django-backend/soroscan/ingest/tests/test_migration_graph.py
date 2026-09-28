@@ -3,9 +3,11 @@ Bug condition exploration test for the ingest app migration graph conflict.
 
 This test file ensures that the migration graph is consistent and has a single leaf node.
 The conflict between 0027_merge_final_leaf_nodes and 0029_contractmetadata has been resolved.
-The current leaf node is 0055_merge_20260831_1259, which merges three migrations
-(0054_contractevent_partitioning, 0054_contractevent_payload_zstd,
-0054_organization_tier) that had independently branched from 0053_webhook_replay_job.
+The current leaf node is 0056_contractevent_ledger_timestamp_index, which adds the
+(contract, ledger, timestamp) composite index for ContractEvent ledger-window
+queries on top of the 0055 merge (0054_contractevent_partitioning,
+0054_contractevent_payload_zstd, 0054_organization_tier) that had independently
+branched from 0053_webhook_replay_job.
 
 Validates: Requirements 2.1, 2.2
 """
@@ -33,8 +35,8 @@ def test_single_leaf_node():
         f"Expected 1 leaf node for 'ingest', found {len(leaf_nodes)}: {leaf_nodes}"
     )
     # Updated to reflect the newest migration leaf.
-    assert leaf_nodes[0][1].startswith("0055_"), (
-        f"Expected leaf node starting with '0055_', got '{leaf_nodes[0][1]}'"
+    assert leaf_nodes[0][1].startswith("0056_"), (
+        f"Expected leaf node starting with '0056_', got '{leaf_nodes[0][1]}'"
     )
 
 

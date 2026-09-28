@@ -15,10 +15,11 @@ from rest_framework_simplejwt.views import (
 )
 
 from soroscan.graphql_views import ThrottledGraphQLView
-from soroscan.health import health_view, readiness_view, worker_health_view
+from soroscan.health import health_view, ping_view, readiness_view, worker_health_view
 from soroscan.meta_views import db_pool_stats_view
 from soroscan.pact_provider import provider_states
 from soroscan.ingest.views import (
+    DLQDeliveryLogViewSet,
     audit_trail_view,
     cache_stats_view,
     celery_status_view,
@@ -51,6 +52,7 @@ urlpatterns = [
 
     path("health/", health_view, name="health"),
     path("ready/", readiness_view, name="readiness"),
+    path("api/health/ping/", ping_view, name="health-ping"),
     path("api/health/workers/", worker_health_view, name="worker-health"),
 
     path(admin_url_path, admin.site.urls),
@@ -73,6 +75,11 @@ urlpatterns = [
         "api/webhooks/deliveries/metrics/",
         webhook_delivery_metrics_view,
         name="webhook-delivery-metrics",
+    ),
+    path(
+        "api/v1/webhooks/dlq/",
+        DLQDeliveryLogViewSet.as_view({"get": "list"}),
+        name="webhook-dlq-list",
     ),
     path("api/ingest/", include("soroscan.ingest.urls")),
     path("v1/", include("soroscan.v1.urls")),

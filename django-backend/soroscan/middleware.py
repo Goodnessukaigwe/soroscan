@@ -113,6 +113,43 @@ class SlowQueryMiddleware(MiddlewareMixin):
         super().__init__(get_response)
         self.threshold_ms: int = getattr(settings, "LOGGING_SLOW_QUERIES_THRESHOLD_MS", 100)
 
+    def _make_execute_wrapper(self, request):
+        threshold = self.threshold_ms
+
+        def _execute(execute, sql, params, many, context):
+            start = time.monotonic()
+            try:
+                return execute(sql, params, many, context)
+            finally:
+                duration_ms = (time.monotonic() - start) * 1000
+                if duration_ms >= threshold:
+                    safe_params = str(params)[:1000] if params else ""
+                    slow_query_logger.warning(
+                        "Slow query (%dms): %s\nParams: %s",
+                        int(duration_ms),
+                        (sql or "")[:1000],
+                        safe_params,
+                        extra={
+                            "duration_ms": round(duration_ms, 2),
+                            "sql": (sql or "")[:1000],
+                            "params": safe_params,
+                            "request_path": getattr(request, "path", ""),
+                        },
+                    )
+
+        return _execute
+
+    def __call__(self, request):
+        if self.async_mode:
+            # Route through the async path with the wrapper active.
+            return self.__acall__(request)
+        with connection.execute_wrapper(self._make_execute_wrapper(request)):
+            return super().__call__(request)
+
+    async def __acall__(self, request):
+        with connection.execute_wrapper(self._make_execute_wrapper(request)):
+            return await super().__acall__(request)
+
     def process_response(self, request, response):
         # Forward RateLimit-* headers set by throttle classes.
         throttle_headers: dict = {}

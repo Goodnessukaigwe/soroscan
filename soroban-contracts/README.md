@@ -11,6 +11,21 @@ The core contract that:
 - Emits standardized events for off-chain consumption
 - Stores event counters and latest events by type
 
+### Emitting SoroScan events from your contract
+
+`soroscan_core` exports `emit_soroscan_event`, which publishes an event with
+the standard SoroScan topic layout `("soroscan", <event_type>, 1u32)`:
+
+```rust
+use soroscan_core::emit_soroscan_event;
+use soroban_sdk::IntoVal;
+
+emit_soroscan_event(&env, "transfer", amount.into_val(&env));
+```
+
+`event_type` must be a valid Soroban symbol (`[a-zA-Z0-9_]`, max 32 chars).
+The trailing `u32` is the topic schema version (`SOROSCAN_EVENT_VERSION`).
+
 ## Building
 
 ```bash

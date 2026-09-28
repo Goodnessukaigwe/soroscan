@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
-    Map, Symbol, Vec,
+    Map, Symbol, Val, Vec,
 };
 
 // Storage keys
@@ -15,6 +15,24 @@ const CONTRACT_EVENT_TYPES_KEY: Symbol = symbol_short!("etypes");
 const CONTRACT_RECENT_EVENTS_KEY: Symbol = symbol_short!("revents");
 /// Last WASM hash applied via `upgrade` (native test contracts start as empty WASM).
 const WASM_HASH_KEY: Symbol = symbol_short!("wasmhash");
+
+/// Topic schema version used by [`emit_soroscan_event`].
+pub const SOROSCAN_EVENT_VERSION: u32 = 1;
+
+/// Publish an event using the standard SoroScan topic layout:
+/// `("soroscan", event_type, SOROSCAN_EVENT_VERSION)`.
+///
+/// Intended for third-party contracts that want their events indexed by
+/// SoroScan. `event_type` must be a valid Soroban symbol (`[a-zA-Z0-9_]`,
+/// at most 32 characters).
+pub fn emit_soroscan_event(env: &Env, event_type: &str, payload: Val) {
+    let topics = (
+        Symbol::new(env, "soroscan"),
+        Symbol::new(env, event_type),
+        SOROSCAN_EVENT_VERSION,
+    );
+    env.events().publish(topics, payload);
+}
 
 /// Maximum number of recent events retained per contract (SC-30).
 /// Older entries are evicted (FIFO) once this bound is reached.
@@ -411,13 +429,19 @@ impl SoroScanCore {
             return Err(ContractError::InvalidSchemaVersion);
         }
 
-        let indexers: Map<Address, bool> = env
+        // `INDEXERS_KEY` holds `IndexerStatus` (written by `init`/`add_indexer`).
+        // Reading it as `Map<Address, bool>` aborted the host, so SC-38
+        // structured events could never be recorded. Match the same way
+        // `record_event` does.
+        let indexers: Map<Address, IndexerStatus> = env
             .storage()
             .instance()
             .get(&INDEXERS_KEY)
             .ok_or(ContractError::NotInitialized)?;
-        if !indexers.get(indexer.clone()).unwrap_or(false) {
-            return Err(ContractError::IndexerNotFound);
+        match indexers.get(indexer.clone()) {
+            Some(IndexerStatus::Active) => {}
+            Some(IndexerStatus::Paused) => return Err(ContractError::IndexerPaused),
+            None => return Err(ContractError::IndexerNotFound),
         }
 
         let correlation_key = DataKey::StructuredByCorrelation(correlation_id.clone());
@@ -975,13 +999,19 @@ impl SoroScanCore {
             return Err(ContractError::TooManyTags);
         }
 
-        let indexers: Map<Address, bool> = env
+        // `INDEXERS_KEY` holds `IndexerStatus` (written by `init`/`add_indexer`).
+        // Reading it as `Map<Address, bool>` aborted the host, so SC-24 tagged
+        // events could never be recorded. Match the same way `record_event`
+        // does.
+        let indexers: Map<Address, IndexerStatus> = env
             .storage()
             .instance()
             .get(&INDEXERS_KEY)
             .ok_or(ContractError::NotInitialized)?;
-        if !indexers.get(indexer).unwrap_or(false) {
-            return Err(ContractError::IndexerNotFound);
+        match indexers.get(indexer.clone()) {
+            Some(IndexerStatus::Active) => {}
+            Some(IndexerStatus::Paused) => return Err(ContractError::IndexerPaused),
+            None => return Err(ContractError::IndexerNotFound),
         }
 
         let record = TaggedEventRecord {
@@ -1053,6 +1083,13 @@ impl SoroScanCore {
         Ok(())
     }
 }
+
+/// Event-logging unit tests (issue #1412) live in their own file so the
+/// topic/payload contract that the off-chain indexer depends on is easy to
+/// audit independently of the behavioural tests below.
+#[cfg(test)]
+#[path = "tests.rs"]
+mod event_emission_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2046,6 +2083,69 @@ mod tests {
         assert_eq!(events_b.get(0).unwrap().event_type, symbol_short!("b_ev"));
     }
 
+    // ── Topic length guard (Soroban max = 4 topics per event) ───────────────
+
+    /// Assert that every event emitted by any contract function has a topic
+    /// vector that does not exceed Soroban's hard limit of 4 topics.
+    ///
+    /// Covers: add_indexer, remove_indexer, record_event,
+    ///         record_structured_event, and record_events_batch (both the
+    ///         per-entry events and the batch-summary event).
+    #[test]
+    fn test_contract_event_topic_length_never_exceeds_four() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, admin, indexer) = setup_contract(&env);
+        let target = Address::generate(&env);
+        let payload_hash = BytesN::from_array(&env, &[0u8; 32]);
+
+        // add_indexer emits ("indexer", "add") — 2 topics
+        client.add_indexer(&admin, &indexer);
+
+        // record_event emits ("soroscan", event_type) — 2 topics
+        client.record_event(&indexer, &target, &symbol_short!("swap"), &payload_hash);
+
+        // record_structured_event emits ("soroscan", "sc38", event_type) — 3 topics
+        let correlation_id = BytesN::from_array(&env, &[1u8; 32]);
+        client.record_structured_event(
+            &indexer,
+            &target,
+            &symbol_short!("sc38ev"),
+            &payload_hash,
+            &1u32,
+            &correlation_id,
+        );
+
+        // record_events_batch emits one event per entry ("soroscan", event_type)
+        // plus a batch-summary event ("soroscan", "batch") — all 2 topics
+        let mut entries = Vec::new(&env);
+        entries.push_back(EventEntry {
+            contract_id: target.clone(),
+            event_type: symbol_short!("mint"),
+            payload_hash: BytesN::from_array(&env, &[2u8; 32]),
+        });
+        entries.push_back(EventEntry {
+            contract_id: target.clone(),
+            event_type: symbol_short!("burn"),
+            payload_hash: BytesN::from_array(&env, &[3u8; 32]),
+        });
+        client.record_events_batch(&indexer, &entries);
+
+        // remove_indexer emits ("indexer", "rem") — 2 topics
+        client.remove_indexer(&admin, &indexer);
+
+        // Every event emitted across all of the above calls must satisfy the
+        // Soroban maximum-topic-count constraint.
+        for (_, topics, _) in env.events().all() {
+            assert!(
+                topics.len() <= 4,
+                "event topic vector length {} exceeds Soroban's maximum of 4",
+                topics.len()
+            );
+        }
+    }
+
     #[test]
     fn test_recent_events_includes_batch_recorded_events() {
         let env = Env::default();
@@ -2191,5 +2291,36 @@ mod tests {
         assert_eq!(payload.old_wasm_hash, previous_wasm_hash);
         assert_eq!(payload.new_wasm_hash, replacement_wasm_hash);
         assert_ne!(payload.old_wasm_hash, payload.new_wasm_hash);
+    }
+
+    #[test]
+    fn test_emit_soroscan_event_helper_topics() {
+        use soroban_sdk::{IntoVal, TryFromVal};
+
+        let env = Env::default();
+        let contract_id = env.register_contract(None, SoroScanCore);
+
+        env.as_contract(&contract_id, || {
+            emit_soroscan_event(&env, "transfer", 42u32.into_val(&env));
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+        let (emitter, topics, data) = events.get(0).unwrap();
+        assert_eq!(emitter, contract_id);
+        assert_eq!(topics.len(), 3);
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(),
+            Symbol::new(&env, "soroscan")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
+            Symbol::new(&env, "transfer")
+        );
+        assert_eq!(
+            u32::try_from_val(&env, &topics.get(2).unwrap()).unwrap(),
+            SOROSCAN_EVENT_VERSION
+        );
+        assert_eq!(u32::try_from_val(&env, &data).unwrap(), 42);
     }
 }

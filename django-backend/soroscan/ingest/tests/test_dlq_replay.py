@@ -3,12 +3,10 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from soroscan.ingest.models import (
-    WebhookDeadLetter,
     WebhookSubscription,
 )
 from soroscan.ingest.tasks import replay_dead_letter

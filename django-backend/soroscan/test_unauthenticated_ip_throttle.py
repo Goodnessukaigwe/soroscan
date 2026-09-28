@@ -4,7 +4,6 @@ Tests for UnauthenticatedIPRateThrottle (issue #1008).
 import pytest
 from django.contrib.auth.models import User
 from django.core.cache import cache
-from django.test import override_settings
 from rest_framework.test import APIRequestFactory
 from unittest.mock import MagicMock
 

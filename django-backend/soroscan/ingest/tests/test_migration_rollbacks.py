@@ -188,6 +188,20 @@ def _assert_seed_data(state, database, seed_data):
 
 @pytest.mark.migration
 @pytest.mark.django_db(transaction=True)
+def test_fresh_database_applies_all_ingest_migrations():
+    database = DEFAULT_DB_ALIAS
+    connection = connections[database]
+    executor = MigrationExecutor(connection)
+    leaf_targets = executor.loader.graph.leaf_nodes(app=APP_LABEL)
+    executor.migrate(leaf_targets)
+    current_state = executor.loader.project_state(leaf_targets)
+    _assert_schema_matches_state(connection, current_state)
+    seed_data = _seed_historical_data(current_state, database)
+    _assert_seed_data(current_state, database, seed_data)
+
+
+@pytest.mark.migration
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("migration_node", _ordered_ingest_migrations())
 def test_ingest_migration_forward_and_backward_paths(migration_node):
     """Each migration can move forward from dependencies and roll back again."""
@@ -284,18 +298,4 @@ def test_irreversible_migrations_are_explicitly_identified():
         "docs/testing/migrations.md before they are accepted: "
         + ", ".join(irreversible)
     )
-
-
-@pytest.mark.migration
-@pytest.mark.django_db(transaction=True)
-def test_fresh_database_applies_all_ingest_migrations():
-    database = DEFAULT_DB_ALIAS
-    connection = connections[database]
-    executor = MigrationExecutor(connection)
-    leaf_targets = executor.loader.graph.leaf_nodes(app=APP_LABEL)
-    executor.migrate(leaf_targets)
-    current_state = executor.loader.project_state(leaf_targets)
-    _assert_schema_matches_state(connection, current_state)
-    seed_data = _seed_historical_data(current_state, database)
-    _assert_seed_data(current_state, database, seed_data)
 

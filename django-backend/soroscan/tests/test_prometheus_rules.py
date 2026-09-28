@@ -1,6 +1,5 @@
 """Tests validating the Prometheus error-rate alerting rules (issue #1294)."""
 
-import os
 from pathlib import Path
 
 import yaml

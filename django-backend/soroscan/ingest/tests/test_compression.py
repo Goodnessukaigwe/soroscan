@@ -3,7 +3,6 @@ import zstandard as zstd
 from django.contrib.auth.models import User
 from django.test import RequestFactory, TestCase
 from soroscan.ingest.models import TrackedContract, ContractEvent
-from soroscan.ingest.fields import CompressedJSONField
 
 class CompressedJSONFieldTest(TestCase):
     def setUp(self):

@@ -239,6 +239,8 @@ const ContractHealthBadge = React.forwardRef<HTMLSpanElement, ContractHealthBadg
     
     const accessibleLabel = ariaLabel ?? `Contract health: ${displayLabel}`;
 
+    const hasTooltip = !disableTooltip && Boolean(finalTooltipContent);
+
     // Dynamic styles for colors and glow effects
     const dynamicStyles: React.CSSProperties = {
       ...style,
@@ -264,6 +266,7 @@ const ContractHealthBadge = React.forwardRef<HTMLSpanElement, ContractHealthBadg
         ref={animation.elementRef}
         role="status"
         aria-label={accessibleLabel}
+        tabIndex={hasTooltip ? 0 : undefined}
         className={cn(
           healthBadgeVariants({ variant, size, glow }),
           animation.animationClasses,
@@ -329,7 +332,7 @@ const ContractHealthBadge = React.forwardRef<HTMLSpanElement, ContractHealthBadg
     );
 
     // Return with or without tooltip
-    if (disableTooltip || !finalTooltipContent) {
+    if (!hasTooltip) {
       return badgeContent;
     }
 

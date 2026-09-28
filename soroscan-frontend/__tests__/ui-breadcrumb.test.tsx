@@ -8,6 +8,9 @@ const defaultItems = [
   { label: "Events" },
 ]
 
+const contractId = `C${"A".repeat(51)}WXYZ`
+const truncatedContractId = "CAAA...WXYZ"
+
 describe("Breadcrumb Component", () => {
   it("renders all items", () => {
     render(<Breadcrumb items={defaultItems} data-testid="breadcrumb" />)
@@ -77,5 +80,49 @@ describe("Breadcrumb Component", () => {
   it("has data-slot attribute", () => {
     render(<Breadcrumb items={defaultItems} data-testid="breadcrumb" />)
     expect(screen.getByTestId("breadcrumb")).toHaveAttribute("data-slot", "breadcrumb")
+  })
+
+  it("truncates contract IDs and keeps the full ID in a title", () => {
+    render(<Breadcrumb items={[{ label: contractId }]} />)
+    const truncated = screen.getByText(truncatedContractId)
+    expect(truncated).toHaveAttribute("title", contractId)
+    expect(screen.queryByText(contractId)).not.toBeInTheDocument()
+  })
+
+  it("truncates contract IDs in link items too", () => {
+    render(
+      <Breadcrumb
+        items={[
+          { label: "Contracts", href: "/contracts" },
+          { label: contractId, href: `/contracts/${contractId}` },
+          { label: "Details" },
+        ]}
+      />,
+    )
+    const link = screen.getByText(truncatedContractId).closest("a")
+    expect(link).toHaveAttribute("title", contractId)
+    expect(link).toHaveAttribute("href", `/contracts/${contractId}`)
+  })
+
+  it("leaves ordinary labels unchanged", () => {
+    render(<Breadcrumb items={defaultItems} />)
+    for (const label of ["Home", "Dashboard", "Events"]) {
+      expect(screen.getByText(label)).not.toHaveAttribute("title")
+    }
+  })
+
+  it("does not truncate the collapsed-items ellipsis", () => {
+    render(
+      <Breadcrumb
+        items={[
+          { label: "Home" },
+          { label: "Section" },
+          { label: contractId },
+          { label: "Details" },
+        ]}
+        maxItems={3}
+      />,
+    )
+    expect(screen.getByText("...")).not.toHaveAttribute("title")
   })
 })

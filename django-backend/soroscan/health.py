@@ -53,6 +53,17 @@ def health_view(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 @throttle_classes([])
+def ping_view(request):
+    """Lightweight ping for load balancers / Docker healthchecks (issue #1436).
+
+    Responds instantly without querying PostgreSQL or Redis.
+    """
+    return Response({"status": "ok"})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+@throttle_classes([])
 def readiness_view(request):
     """Readiness probe - DB, Redis, and Soroban RPC are connected."""
     components = {

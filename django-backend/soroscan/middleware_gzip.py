@@ -1,7 +1,5 @@
-import gzip
 
 from django.middleware.gzip import GZipMiddleware
-from django.utils.text import compress_string
 
 
 class CustomGZipMiddleware(GZipMiddleware):

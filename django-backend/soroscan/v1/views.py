@@ -13,10 +13,7 @@ from rest_framework.response import Response
 
 from soroscan.ingest.models import ContractEvent, TrackedContract
 
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
 from soroscan.ingest.models import WebhookDeadLetter
 from soroscan.ingest.services.webhook_replay import create_replay_job
 
@@ -167,3 +164,60 @@ def bulk_replay_dead_letters(request):
         "message": f"Successfully queued {len(jobs_created)} replay jobs.",
         "job_ids": jobs_created
     }, status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def replay_dlq_webhooks(request):
+    """
+    Re-queue dead-lettered webhook deliveries in bulk (issue #1406).
+
+    Accepts either an explicit ``delivery_ids`` list or a ``contract_id`` to
+    replay every dead-lettered delivery for one contract:
+
+    ``{"delivery_ids": [1, 2, 3]}`` or ``{"contract_id": "C..."}``
+
+    The work is handed to the ``replay_dead_letter_webhooks`` Celery task and
+    the request returns as soon as it is queued.
+    """
+    if not request.user.is_staff:
+        return Response(
+            {"error": "Admin access required"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    from soroscan.ingest.tasks import replay_dead_letter_webhooks
+
+    delivery_ids = request.data.get("delivery_ids")
+    contract_id = request.data.get("contract_id")
+
+    if delivery_ids is not None and not isinstance(delivery_ids, list):
+        return Response(
+            {"error": "delivery_ids must be a list of delivery log ids."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if contract_id is not None and not isinstance(contract_id, str):
+        return Response(
+            {"error": "contract_id must be a string."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not delivery_ids and not contract_id:
+        return Response(
+            {"error": "Provide either delivery_ids or contract_id."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    async_result = replay_dead_letter_webhooks.delay(
+        delivery_ids=delivery_ids,
+        contract_id=contract_id,
+    )
+
+    return Response(
+        {
+            "message": "Dead-letter replay queued.",
+            "task_id": str(async_result.id),
+            "delivery_ids": delivery_ids,
+            "contract_id": contract_id,
+        },
+        status=status.HTTP_202_ACCEPTED,
+    )

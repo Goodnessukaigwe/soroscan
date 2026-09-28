@@ -346,6 +346,30 @@ describe('ContractHealthBadge', () => {
       // Should have focus-visible styles
       expect(badge).toHaveClass('focus-visible:outline-none');
     });
+
+    it('is reachable by keyboard so the tooltip can be read without a mouse', async () => {
+      const user = userEvent.setup();
+
+      render(<ContractHealthBadge status="degraded" />);
+
+      const badge = screen.getByRole('status');
+      expect(badge).toHaveAttribute('tabindex', '0');
+
+      await user.tab();
+
+      expect(document.activeElement).toBe(badge);
+
+      await waitFor(() => {
+        expect(screen.getByRole('tooltip')).toBeInTheDocument();
+      });
+    });
+
+    it('is not focusable when the tooltip is disabled', () => {
+      render(<ContractHealthBadge status="healthy" disableTooltip />);
+
+      const badge = screen.getByRole('status');
+      expect(badge).not.toHaveAttribute('tabindex');
+    });
   });
 
   describe('Color Configuration', () => {

@@ -72,7 +72,7 @@ client
 |---|---|---|---|
 | `baseUrl` | `string` | ✅ | API base URL, e.g. `https://api.soroscan.io` |
 | `apiKey` | `string` | — | API key sent as `Authorization: Bearer <key>` |
-| `timeoutMs` | `number` | — | Request timeout in ms (default: `30_000`) |
+| `timeoutMs` | `number` | — | Request timeout in ms (default: `10_000`) |
 
 ---
 

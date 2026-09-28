@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { cn } from '@/lib/utils';
+import { Spinner } from '@/components/ui/spinner';
 
 export interface VerificationRequestData {
   contractId: string;
@@ -172,8 +173,9 @@ export function VerificationRequestForm({
         type="submit"
         disabled={isSubmitting}
         data-testid="vrf-submit-button"
-        className="w-full h-9 px-4 text-sm font-mono rounded border border-green-700 bg-green-900/20 text-green-400 hover:bg-green-900/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        className="w-full h-9 px-4 text-sm font-mono rounded border border-green-700 bg-green-900/20 text-green-400 hover:bg-green-900/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
       >
+        {isSubmitting && <Spinner size="mini" color="success" label="Submitting..." />}
         {isSubmitting ? 'Submitting…' : 'Submit for Verification'}
       </button>
     </form>

@@ -93,7 +93,7 @@ export function TeamMembersTable({
               <TableHead>
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 uppercase tracking-wider"
+                  className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
                   onClick={() => toggleSort("email")}
                 >
                   Member
@@ -103,7 +103,7 @@ export function TeamMembersTable({
               <TableHead>
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 uppercase tracking-wider"
+                  className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
                   onClick={() => toggleSort("role")}
                 >
                   Role
@@ -113,7 +113,7 @@ export function TeamMembersTable({
               <TableHead>
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 uppercase tracking-wider"
+                  className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
                   onClick={() => toggleSort("joinedAt")}
                 >
                   Joined
