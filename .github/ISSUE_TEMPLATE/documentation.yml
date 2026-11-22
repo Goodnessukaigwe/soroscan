@@ -1,0 +1,30 @@
+name: Documentation
+description: Report incorrect, missing, unclear, or outdated documentation
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve the SoroScan documentation.
+  - type: input
+    id: location
+    attributes:
+      label: Affected page or file
+      description: Link to the documentation page or give the file path.
+      placeholder: "e.g. soroscan-docs/docs/getting-started.md"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong?
+      description: Explain what is incorrect, missing, unclear, or outdated.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested improvement
+      description: Proposed wording or changes, if you have them.
+    validations:
+      required: false

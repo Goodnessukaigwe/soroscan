@@ -1,0 +1,68 @@
+name: Bug report
+description: Report something that is not working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please search existing issues first to avoid duplicates.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of SoroScan is affected?
+      options:
+        - Backend
+        - Frontend
+        - SDK
+        - Contracts
+        - Docs
+        - Infrastructure
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, numbered steps that reliably reproduce the problem.
+      placeholder: |
+        1. Go to '...'
+        2. Run '...'
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system and relevant software or package versions.
+      placeholder: |
+        - OS: Ubuntu 24.04
+        - Python: 3.12
+        - Node.js: 20
+        - SoroScan version / commit:
+        - Browser (if frontend):
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, errors, or stack traces
+      description: Paste any relevant output. It is rendered as code automatically.
+      render: shell
+    validations:
+      required: false

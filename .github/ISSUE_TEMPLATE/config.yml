@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: SoroScan documentation
+    url: https://github.com/SoroScan/soroscan/tree/main/soroscan-docs
+    about: Guides, API references, and setup instructions. Check here before opening an issue.
