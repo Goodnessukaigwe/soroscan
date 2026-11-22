@@ -1,3 +1,4 @@
+import { describe, it, expect } from "vitest";
 import { parseSC20Event } from "../src/features/sc20";
 
 describe("SC-20 Event Parser", () => {

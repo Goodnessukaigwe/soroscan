@@ -1,3 +1,4 @@
+import { describe, it, expect } from "vitest";
 import { verifySC36Payload } from "../src/features/sc36";
 
 describe("SC-36 Payload Verifier", () => {

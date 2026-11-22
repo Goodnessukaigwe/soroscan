@@ -1,3 +1,4 @@
+import { describe, it, expect } from "vitest";
 import { filterSC21Events, SC21Event } from "../src/features/sc21";
 
 describe("SC-21 Event Filter", () => {
