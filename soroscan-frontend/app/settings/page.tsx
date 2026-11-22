@@ -1,5 +1,12 @@
 import { Suspense } from "react";
 import SettingsShell from "./SettingsShell";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Settings | SoroScan",
+  description:
+    "Manage your SoroScan account, organization, and notification settings.",
+};
 
 export default function SettingsPage() {
   return (

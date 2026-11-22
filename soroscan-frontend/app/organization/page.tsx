@@ -1,5 +1,12 @@
 import { Suspense } from "react";
 import OrganizationPage from "./OrganizationPageClient";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Organization | SoroScan",
+  description:
+    "Manage your SoroScan organization, its members, and its tracked contracts.",
+};
 
 export default function OrganizationRoute() {
   return (
